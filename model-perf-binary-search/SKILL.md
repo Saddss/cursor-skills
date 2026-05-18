@@ -20,6 +20,7 @@ What it does (idempotent — re-running is cheap):
 - Installs `uv` (user-local) if missing, creates `$WORKDIR/.venv`, and `uv pip install -r requirements.txt`.
 - Symlinks the replay dataset from `/mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log` into the workdir.
 - Creates `$WORKDIR/bench-runs/`.
+- **Runs `scripts/health_check.py`** (full GPU/PCIe/AER/pinned-BW preflight, see below) and writes the result to `$WORKDIR/.health_check.json`.
 
 Environment overrides (all optional):
 - `LLM_BENCH_DIR` — workdir (default `$HOME/llm-inference-benchmarking`).
@@ -33,9 +34,40 @@ eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh | ta
 export LLM_BENCH_DIR="$WORKDIR"
 ```
 
-If bootstrap exits non-zero, surface the stderr to the user verbatim and stop — almost always it means the shared dataset mount is missing or git can't reach GitHub.
+`bootstrap.sh` always returns exit 0 on a successful setup (even when the health check reports problems); the agent must read `$LLM_BENCH_DIR/.health_check.json` to decide whether to proceed. If bootstrap itself exits non-zero, surface the stderr to the user verbatim and stop — almost always it means the shared dataset mount is missing or git can't reach GitHub.
 
 All later commands in this skill assume `$LLM_BENCH_DIR` is set and points at a bootstrapped workdir with a `.venv/`, `online_replay.py`, and a real (or symlinked) `replay-logs-origin.log`.
+
+## Pre-flight health check (gates offload runs)
+
+Right after bootstrap, **always** read `$LLM_BENCH_DIR/.health_check.json` and act on its top-level `exit` field. The check covers:
+
+- GPU presence + driver version
+- PCIe link gen (current vs hardware max), with virtualization detection (vfio passthrough often caps the guest at Gen1)
+- AER error counts (correctable/fatal/nonfatal) on the GPU's PCIe path
+- Other processes already on the GPU (warn if >50% memory is held by someone else)
+- **Pinned host↔GPU bandwidth** with `torch` (16 MiB + 64 MiB H2D/D2H, ~2s)
+- Free disk space at the workdir
+
+### Exit code semantics + required reaction
+
+| exit | meaning | offload runs | non-offload runs |
+|------|---------|--------------|------------------|
+| **0** | all green | proceed | proceed |
+| **1** | warnings only (e.g. peak BW < 55% of link theoretical, low disk, foreign GPU process) | print the warnings in the agent's reply, then ask user to confirm before starting offload | proceed; mention warnings in the final report |
+| **2** | blocker — almost always severely degraded PCIe link or no torch + no link info | **refuse** to run an offload binary search unless the user types an explicit `force=true` override; offer to run non-offload only, or to switch to a different machine | proceed with non-offload, but include the health-check block in the final report |
+
+When `exit >= 1`, **paste the relevant `issues_red` / `issues_warn` strings verbatim** into the agent's reply so the user sees them. Do not paraphrase — these messages already include the action items.
+
+### Re-running the check manually
+
+```bash
+"$LLM_BENCH_DIR/.venv/bin/python" \
+  ~/.cursor/skills/model-perf-binary-search/scripts/health_check.py --workdir "$LLM_BENCH_DIR"
+# or: --no-bandwidth   for a structural-only run (~0.5s, no torch needed)
+```
+
+The Python file is portable — invoke it with whichever python has `torch` installed. The script gracefully degrades when torch is missing (skips the BW measurement and warns about it instead of failing).
 
 ## Required inputs (ask the user up-front, in one message)
 

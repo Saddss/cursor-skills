@@ -114,7 +114,34 @@ if [ -n "$smoke_err" ]; then
 fi
 log "smoke check: online_replay imports OK"
 
+# 7) full health check (GPU + PCIe link + AER + pinned BW + free GPU mem + disk).
+#    Prefer the system python3 because it usually has torch (needed for the
+#    bandwidth measurement); fall back to the venv python.
+HEALTH_PY="$(dirname "$0")/health_check.py"
+HEALTH_PYTHON="$WORKDIR/.venv/bin/python"
+if python3 -c "import torch" >/dev/null 2>&1; then
+  HEALTH_PYTHON="$(command -v python3)"
+fi
+log "running health check ($HEALTH_PYTHON $HEALTH_PY)"
+set +e
+"$HEALTH_PYTHON" "$HEALTH_PY" --workdir "$WORKDIR" >&2
+HEALTH_RC=$?
+set -e
+
+log "health check exit=$HEALTH_RC  (json: $WORKDIR/.health_check.json)"
+if [ "$HEALTH_RC" -eq 2 ]; then
+  log "BLOCKER detected — see the report above. Offload-mode runs should NOT proceed."
+elif [ "$HEALTH_RC" -eq 1 ]; then
+  log "warnings present — non-offload runs are OK, offload metrics may be misleading."
+fi
+
 log "ready"
 
 # Last line of stdout = the resolved workdir, for callers to capture.
+# The health check's exit code is propagated as the bootstrap's exit code
+# UNLESS we want bootstrap to still succeed for non-offload work. We choose
+# to ALWAYS return 0 from bootstrap proper; the agent reads .health_check.json
+# to decide what to do. This makes bootstrap idempotent across both green and
+# degraded machines without forcing callers to special-case exit codes.
 printf 'WORKDIR=%s\n' "$WORKDIR"
+exit 0

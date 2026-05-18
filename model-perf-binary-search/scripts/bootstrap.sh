@@ -12,8 +12,8 @@
 #
 # Environment overrides (all optional):
 #   LLM_BENCH_DIR           target workdir         (default: $HOME/llm-inference-benchmarking)
-#   LLM_BENCH_REPO_URL      repo to clone          (default: https://github.com/FlowGPT/llm-inference-benchmarking)
-#   LLM_BENCH_REPO_BRANCH   branch to check out    (default: qq-test)
+#   LLM_BENCH_REPO_URL      repo to clone          (default: https://github.com/Saddss/llm-inference-benchmarking)
+#   LLM_BENCH_REPO_BRANCH   branch to check out    (default: sss-test)
 #   LLM_BENCH_DATASET_SRC   replay-log source path (default: /mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log)
 #
 # Last stdout line is the resolved WORKDIR=<absolute path> so the caller can
@@ -21,8 +21,8 @@
 
 set -euo pipefail
 
-REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/FlowGPT/llm-inference-benchmarking}"
-REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-qq-test}"
+REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/Saddss/llm-inference-benchmarking}"
+REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-sss-test}"
 DATASET_SRC="${LLM_BENCH_DATASET_SRC:-/mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log}"
 WORKDIR="${LLM_BENCH_DIR:-$HOME/llm-inference-benchmarking}"
 

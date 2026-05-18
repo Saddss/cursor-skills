@@ -5,7 +5,7 @@ description: Find the maximum sustainable QPS of an LLM inference service that m
 
 # Model Performance Binary Search
 
-Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives the `online_replay.py` script from `FlowGPT/llm-inference-benchmarking@qq-test` against a service that the user provides a startup command for, and binary-searches the QPS axis.
+Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives the `online_replay.py` script from `Saddss/llm-inference-benchmarking@sss-test` (carries the sampler / timeout / round-drain fixes; the upstream `FlowGPT/qq-test` is missing them and will not work against TRT-LLM or any saturated service) against a service that the user provides a startup command for, and binary-searches the QPS axis.
 
 ## Bootstrap (must run at session start, idempotent)
 
@@ -168,6 +168,19 @@ The agent owns service start, but **never** stops the service. Per the user's po
 
 Note that some servers (vLLM, SGLang, TRT-LLM) take minutes to load weights. Do not assume readiness from the absence of error output.
 
+### Docker-based services (most common case)
+
+When the user's startup command starts with `docker run …` (vLLM/SGLang/TRT-LLM official images, custom containers), substitute PID-based ops with container-name-based ops. Required tweaks:
+
+- **Launch in detached mode.** The user-provided command is usually foreground; replace `docker run` with `docker run -d --rm --name <bench_name>` so the agent can manage and inspect it. Always carry these flags forward from the user's command: `--gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864` (the last two prevent silent CUDA OOMs on `cudaHostAlloc` paths, e.g. KV offload, pinned KV cache, large prefetch buffers).
+- **Mount a HuggingFace cache** so service swap (Mode A / B) does not re-download weights: `-v $HOME/.cache/huggingface:/root/.cache/huggingface`.
+- **Capture logs.** PID-based `tail -f service.log` does not work; do `( docker logs -f <bench_name> > bench-runs/service_<ts>.log 2>&1 & )` and report that log path in the final report.
+- **Liveness check.** Replace `kill -0 {pid}` with `docker ps --filter name=<bench_name> --format '{{.Names}}'` (empty output = container died, dump `docker logs --tail 100 <bench_name>` immediately).
+- **Service swap (Mode A/B).** Replace `kill {pid} && start` with `docker stop <bench_name>` (waits 10s for graceful SIGTERM, then SIGKILL — sufficient for vLLM/TRT-LLM). The `--rm` flag deletes the container automatically once stopped.
+- **Cleanup-on-finish policy is identical**: leave the container running. Tell the user to run `docker stop <bench_name>` themselves when done.
+
+Common gotcha: `docker stats <bench_name>` only updates every ~2s and lags real GPU usage; for live GPU pressure use `nvidia-smi` on the host, not docker stats.
+
 ## Progress monitoring
 
 Long binary-search sessions need regular wall-clock progress reports so the user does not have to ask. The cadence depends on the offload flag:
@@ -306,20 +319,34 @@ Mirror logic: let `p` be the avg-p50 at current LOW `L`. Pick `new_low = round(L
 - Precision `0.1` means the final answer is reported to one decimal place. If the user says "精确到 0.5" or "整数即可", use that as the precision instead.
 - All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** when monotonically rising per-round p50 (e.g. every round 1.3× or more than the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup), the probe is producing only growing-queue artifacts and not useful steady-state numbers. In that case `pkill -f online_replay.py`, write a row with `Result=FAIL`, `Notes="queue runaway, killed at round X / Y, last p50 = Zs"`, set `hit_rate=n/a`, and proceed with the bisect. Document the exception in the final report so the user knows which probes were early-stopped.
 
+### Warmup-bias caveat (always disclose in the final report)
+
+The 12-round / tail-6 (or 24-round / tail-12) average is sensitive to **cold-start backlog**: under realistic chat replay, round 1 typically produces 50–100s p50 (initial burst of in-flight requests draining through the engine's queues), and it takes ~5–7 rounds for the queue to fully reach steady state. Because the tail window starts at round 7, **the first 1–2 tail rounds are still draining warmup** and can pull the tail-6 average well above the steady-state p50.
+
+Concrete pattern seen in real runs: per-round p50 `[73, 28, 23, 13, 17, 38, 17, 4.1, 4.5, 4.2, 5.0, 4.5]` — rounds 8–12 steady at 4.5s, but tail-6 average is 6.50s because round 7's 17s leaks in. A 0.1-QPS step up makes round 7 land at 18s instead of 17s, fails the SLO, and the bisect reports a max QPS that **underestimates the true sustainable QPS by ~10–20%**.
+
+When reporting, alongside the tail-6 average always show a "tail-5 steady" column (mean of rounds 8–12 / 13–24) and note in the footer:
+
+> *Reported Max QPS is the tail-6-averaged answer. The tail-5 steady-state column shows what the engine sustains once the cold-start backlog is drained; if it is materially lower than the tail-6 average for the winning QPS, the true sustainable rate is closer to one bisect step higher than the reported answer. To verify, re-run that bisect step with `--round-duration 60` or `--max-rounds 24`.*
+
+Only suggest re-running with the longer duration — do **not** silently change `--round-duration` / `--max-rounds`; those are part of the published methodology.
+
 ## Reporting to the user
 
 Track every probe and present the result clearly when done. Use a markdown table:
 
-| Step | QPS | Result | Avg p50 (last N) | Prefix cache hit | Notes |
-|------|-----|--------|------------------|------------------|-------|
-| 1 | 6.0 | PASS | 4.81s | 31.2% | extrapolating up |
-| 2 | 9.0 | PASS | 5.92s | 28.7% | extrapolating up |
-| 3 | 12.0 | FAIL | 7.40s | 24.1% | new HIGH; hit rate dropped → fewer KV blocks |
-| 4 | 10.0 | PASS | 6.11s | 27.4% | |
-| 5 | 11.0 | FAIL | 6.84s | 25.8% | |
-| ... | ... | ... | ... | ... | converged |
+| Step | QPS | Result | Avg p50 (tail N) | Tail-5 steady | Prefix cache hit | Notes |
+|------|-----|--------|------------------|---------------|------------------|-------|
+| 1 | 6.0 | PASS | 4.81s | 4.20s | 31.2% | extrapolating up |
+| 2 | 9.0 | PASS | 5.92s | 5.41s | 28.7% | extrapolating up |
+| 3 | 12.0 | FAIL | 7.40s | 6.90s | 24.1% | new HIGH; hit rate dropped → fewer KV blocks |
+| 4 | 10.0 | PASS | 6.11s | 5.70s | 27.4% | |
+| 5 | 11.0 | FAIL | 6.84s | 6.20s | 25.8% | tail-5 still under SLO → cold-start bias |
+| ... | ... | ... | ... | ... | ... | converged |
 
-Render `hit rate` as a percentage with one decimal. If the value is missing for a probe (e.g. `/metrics` unreachable, `NO_PREFIX_METRICS`, or fallback failed), show `n/a` and add a one-line footer explaining why.
+- `Avg p50 (tail N)` is the official PASS/FAIL signal (mean of the last `tail_window` rounds — 6 if `offload=OFF`, 12 if `offload=ON`).
+- `Tail-5 steady` is the diagnostic column from the warmup-bias caveat: mean of the **last 5 rounds only** (or last 10 for `offload=ON`). When a probe FAILs but its tail-5 steady is comfortably under SLO, flag it in `Notes` — the true sustainable QPS is likely one bisect step higher.
+- Render `Prefix cache hit` as a percentage with one decimal. If the value is missing for a probe (e.g. `/metrics` unreachable, `NO_PREFIX_METRICS`, or fallback failed), show `n/a` and add a one-line footer explaining why.
 
 Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={12 or 24}, tail={6 or 12})`.
 
@@ -349,3 +376,4 @@ Confirm these from the startup logs: the engine prints `[gpu_worker.py:NNN] Allo
 
 - `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), takes the tail-window mean, compares to the SLO, prints a single JSON line, and uses the exit code to signal PASS/FAIL/NOT_ENOUGH_ROUNDS. Read its top docstring for full details.
 - `scripts/prefix_cache_hit_rate.py` snapshots a Prometheus `/metrics` endpoint and computes prefix-cache hit rate between two snapshots. Two subcommands: `snapshot --url … --out …` and `diff --before … --after …`. Framework-agnostic: discovers prefix-cache metric names by heuristic (any name containing "prefix" + hit-like / query-like keywords; falls back to hits+misses pair). Exit codes: `0` OK, `2` NO_PREFIX_METRICS (no prefix metrics on endpoint — caller should fall back to log scraping or engine docs), `3` error. Read its top docstring for full details.
+- `scripts/smoke.sh` runs `analyze_rounds.py` and `prefix_cache_hit_rate.py` against bundled `scripts/fixtures/` files and checks both exit code and a key substring in the JSON output (PASS/FAIL/NOT_ENOUGH_ROUNDS, prefix-cache hit_rate, NO_PREFIX_METRICS). Use this after editing either helper to catch obvious regressions — cheap, no network, no GPU. Exits non-zero with a count if any check fails.

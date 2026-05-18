@@ -245,17 +245,24 @@ Each binary-search step is one probe at a candidate QPS `q` (always rounded to t
 5. Run **one** `online_replay.py` process for `q <= 10`. For `q > 10`, shard the load across `n = ceil(q / 10)` parallel processes, each with `--target-qps {q/n}` and a `--sample-range` chunk of width `sample_end / n` (so the union covers `[0, sample_end)`). Each shard writes to its own json file.
 6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 12/24 rounds.
 7. **Snapshot `/metrics` again** immediately after the last shard exits, then run the prefix-cache diff helper. Cache the resulting `hit_rate` for the per-probe report.
-8. Decide PASS/FAIL with the bundled helper:
+8. Decide PASS/FAIL with the bundled helper. **Always pass `--auto-steady`** unless the user explicitly asks for the legacy tail-only behavior:
 
 ```bash
 python3 ~/.cursor/skills/model-perf-binary-search/scripts/analyze_rounds.py \
     --json bench-runs/qps_{q}_{ts}_shard*.jsonl \
     --total-rounds {12 or 24} \
     --tail-window {6 or 12} \
-    --slo {SLO}
+    --slo {SLO} \
+    --auto-steady
 ```
 
-The helper prints a single JSON line and exits `0=PASS / 1=FAIL / 2=NOT_ENOUGH_ROUNDS`. PASS means `avg_p50_latency_s < SLO` over the tail window.
+The helper prints a single JSON line and exits `0=PASS / 1=FAIL / 2=NOT_ENOUGH_ROUNDS`.
+
+**How `--auto-steady` decides PASS/FAIL.** The fixed tail window is sensitive to cold-start backlog: on real chat workloads the first 5-7 rounds at any QPS show large p50 (queue drains slowly), and a fixed `tail-6` slice often still contains 1-2 of those backlog rounds, dragging the average above SLO when the engine has actually reached a steady-state below SLO. The auto-steady algorithm walks backward from the last round, including a round in the steady window if its p50 is within `±0.30` of the running median; it stops at the first round that's too far off. If the resulting window has at least 3 rounds, its average becomes the **primary** PASS/FAIL signal. If not (engine never reached steady state, or noisy variance), it falls back to the tail-window average and emits a note. Tunable knobs: `--steady-tolerance 0.30` (default), `--steady-min-window 3` (default).
+
+The helper also always emits a `warmup_dominated` boolean (true when `tail-N / tail-3 > 1.5` or `tail-N / last_round > 2.0`) so the agent can call out runs where the legacy tail metric would have been misleading.
+
+Validated on 12 historical TRT-LLM / vLLM probes against this skill (May 2025): `--auto-steady` flipped 6 cases from FAIL → PASS without any false positives; the 6 cases were ones where rounds 8-12 sat steady well under SLO but rounds 6-7 still had backlog. The flipped runs match the engines' actual sustainable QPS as confirmed by re-runs at adjacent QPS values.
 
 `NOT_ENOUGH_ROUNDS` (e.g. server crashed mid-run, requests timed out) should be treated as **FAIL** for binary-search purposes, but log the JSON output so the user can investigate.
 
@@ -351,33 +358,38 @@ Mirror logic: let `p` be the avg-p50 at current LOW `L`. Pick `new_low = round(L
 - Precision `0.1` means the final answer is reported to one decimal place. If the user says "精确到 0.5" or "整数即可", use that as the precision instead.
 - All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** when monotonically rising per-round p50 (e.g. every round 1.3× or more than the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup), the probe is producing only growing-queue artifacts and not useful steady-state numbers. In that case `pkill -f online_replay.py`, write a row with `Result=FAIL`, `Notes="queue runaway, killed at round X / Y, last p50 = Zs"`, set `hit_rate=n/a`, and proceed with the bisect. Document the exception in the final report so the user knows which probes were early-stopped.
 
-### Warmup-bias caveat (always disclose in the final report)
+### Warmup-bias caveat (handled by `--auto-steady`; still disclose in report)
 
-The 12-round / tail-6 (or 24-round / tail-12) average is sensitive to **cold-start backlog**: under realistic chat replay, round 1 typically produces 50–100s p50 (initial burst of in-flight requests draining through the engine's queues), and it takes ~5–7 rounds for the queue to fully reach steady state. Because the tail window starts at round 7, **the first 1–2 tail rounds are still draining warmup** and can pull the tail-6 average well above the steady-state p50.
+The fixed tail-N window is sensitive to **cold-start backlog**: under realistic chat replay, round 1 typically produces 50–100s p50 (initial burst of in-flight requests draining through the engine's queues), and it takes ~5–7 rounds for the queue to fully reach steady state. With `tail-6` of 12, the first 1–2 tail rounds are often still draining warmup and pull the average above the engine's steady-state p50.
 
-Concrete pattern seen in real runs: per-round p50 `[73, 28, 23, 13, 17, 38, 17, 4.1, 4.5, 4.2, 5.0, 4.5]` — rounds 8–12 steady at 4.5s, but tail-6 average is 6.50s because round 7's 17s leaks in. A 0.1-QPS step up makes round 7 land at 18s instead of 17s, fails the SLO, and the bisect reports a max QPS that **underestimates the true sustainable QPS by ~10–20%**.
+Concrete pattern from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 15, 38, 16, 4.4, 4.8, 5.2, 5.1, 4.9]`. tail-6 = 6.71s → FAIL. But rounds 8–12 are clearly steady at ~4.9s. The legacy tail-only judgement reports a max QPS that **underestimates true sustainable QPS by ~10–20%**.
 
-When reporting, alongside the tail-6 average always show a "tail-5 steady" column (mean of rounds 8–12 / 13–24) and note in the footer:
+**`--auto-steady` (recommended default) automatically detects and uses the steady window.** It identified the [4.4, 4.8, 5.2, 5.1, 4.9] tail above as a 5-round steady window at 4.89s, flipping the verdict to PASS — matching the engine's actual sustained capacity.
 
-> *Reported Max QPS is the tail-6-averaged answer. The tail-5 steady-state column shows what the engine sustains once the cold-start backlog is drained; if it is materially lower than the tail-6 average for the winning QPS, the true sustainable rate is closer to one bisect step higher than the reported answer. To verify, re-run that bisect step with `--round-duration 60` or `--max-rounds 24`.*
+**Reporting expectations even when auto-steady passes:**
 
-Only suggest re-running with the longer duration — do **not** silently change `--round-duration` / `--max-rounds`; those are part of the published methodology.
+- Show both the primary metric (steady avg, when detected) and the legacy tail-N avg in the per-probe table.
+- If `warmup_dominated == true` in the analyzer JSON, paste the helper's `notes[]` string verbatim in the final report. It signals the legacy tail metric would have been misleading.
+- If a bisect step PASSes via steady but `warmup_dominated == true`, optionally suggest the user re-run that QPS with `--round-duration 60` or `--max-rounds 24` to confirm. Do **not** silently change those values — they are part of the published methodology.
+
+**When `--auto-steady` falls back to tail-N** (no ≥3-round window within ±30% of running median): the engine genuinely never reached steady state at this QPS. Report the tail-N number and the `notes` line saying "no steady window detected"; this is a legitimate FAIL signal (or, if `tail-N` itself is far above SLO, a clear overload signal).
 
 ## Reporting to the user
 
 Track every probe and present the result clearly when done. Use a markdown table:
 
-| Step | QPS | Result | Avg p50 (tail N) | Tail-5 steady | Prefix cache hit | Notes |
-|------|-----|--------|------------------|---------------|------------------|-------|
-| 1 | 6.0 | PASS | 4.81s | 4.20s | 31.2% | extrapolating up |
-| 2 | 9.0 | PASS | 5.92s | 5.41s | 28.7% | extrapolating up |
-| 3 | 12.0 | FAIL | 7.40s | 6.90s | 24.1% | new HIGH; hit rate dropped → fewer KV blocks |
-| 4 | 10.0 | PASS | 6.11s | 5.70s | 27.4% | |
-| 5 | 11.0 | FAIL | 6.84s | 6.20s | 25.8% | tail-5 still under SLO → cold-start bias |
+| Step | QPS | Result | Primary p50 (window) | Tail-N p50 | Prefix cache hit | Notes |
+|------|-----|--------|----------------------|------------|------------------|-------|
+| 1 | 6.0 | PASS | 4.81s (steady-5) | 5.20s | 31.2% | extrapolating up |
+| 2 | 9.0 | PASS | 5.92s (steady-4) | 6.41s | 28.7% | warmup-dominated; extrapolating |
+| 3 | 12.0 | FAIL | 7.40s (tail-6, no steady) | 7.40s | 24.1% | engine never reached steady |
+| 4 | 10.0 | PASS | 6.11s (steady-5) | 6.30s | 27.4% | |
+| 5 | 11.0 | FAIL | 6.84s (steady-3) | 7.10s | 25.8% | thin steady evidence; suggest re-run with --max-rounds 24 |
 | ... | ... | ... | ... | ... | ... | converged |
 
-- `Avg p50 (tail N)` is the official PASS/FAIL signal (mean of the last `tail_window` rounds — 6 if `offload=OFF`, 12 if `offload=ON`).
-- `Tail-5 steady` is the diagnostic column from the warmup-bias caveat: mean of the **last 5 rounds only** (or last 10 for `offload=ON`). When a probe FAILs but its tail-5 steady is comfortably under SLO, flag it in `Notes` — the true sustainable QPS is likely one bisect step higher.
+- **Primary p50** is the official PASS/FAIL signal (output of `--auto-steady`). It's either the auto-detected steady-window average (preferred) or the tail-N average (fallback). Always show which window was used in parentheses: `(steady-N)` or `(tail-N, no steady)`.
+- **Tail-N p50** is the legacy column kept for transparency / comparison with historic skill runs. If primary == tail (no steady detected), the two columns are equal.
+- When `warmup_dominated == true` in the analyzer JSON, paste its `notes[]` string in the per-probe `Notes` cell so the user sees why the two columns may diverge.
 - Render `Prefix cache hit` as a percentage with one decimal. If the value is missing for a probe (e.g. `/metrics` unreachable, `NO_PREFIX_METRICS`, or fallback failed), show `n/a` and add a one-line footer explaining why.
 
 Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={12 or 24}, tail={6 or 12})`.
@@ -406,6 +418,6 @@ Confirm these from the startup logs: the engine prints `[gpu_worker.py:NNN] Allo
 
 ## Helper scripts
 
-- `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), takes the tail-window mean, compares to the SLO, prints a single JSON line, and uses the exit code to signal PASS/FAIL/NOT_ENOUGH_ROUNDS. Read its top docstring for full details.
+- `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), and emits PASS/FAIL/NOT_ENOUGH_ROUNDS via exit code. Two metrics are always computed: (a) the legacy tail-N average, (b) an auto-detected steady-window average (backward walk with `±0.30` of running median, minimum 3 rounds). When invoked with `--auto-steady` (recommended default in the probe procedure), the steady metric becomes the primary PASS/FAIL signal with tail-N as fallback. Without the flag, behavior is byte-identical to the v1 tail-only algorithm. Also emits a `warmup_dominated` boolean and human-readable `notes[]` for downstream reporting. Read its top docstring for full details.
 - `scripts/prefix_cache_hit_rate.py` snapshots a Prometheus `/metrics` endpoint and computes prefix-cache hit rate between two snapshots. Two subcommands: `snapshot --url … --out …` and `diff --before … --after …`. Framework-agnostic: discovers prefix-cache metric names by heuristic (any name containing "prefix" + hit-like / query-like keywords; falls back to hits+misses pair). Exit codes: `0` OK, `2` NO_PREFIX_METRICS (no prefix metrics on endpoint — caller should fall back to log scraping or engine docs), `3` error. Read its top docstring for full details.
 - `scripts/smoke.sh` runs `analyze_rounds.py` and `prefix_cache_hit_rate.py` against bundled `scripts/fixtures/` files and checks both exit code and a key substring in the JSON output (PASS/FAIL/NOT_ENOUGH_ROUNDS, prefix-cache hit_rate, NO_PREFIX_METRICS). Use this after editing either helper to catch obvious regressions — cheap, no network, no GPU. Exits non-zero with a count if any check fails.

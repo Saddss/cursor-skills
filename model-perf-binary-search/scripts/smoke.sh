@@ -43,6 +43,31 @@ check "analyze_rounds: short jsonl -> NOT_ENOUGH_ROUNDS, rc 2" 2 '"status": "NOT
     --json "$FIX/analyze_pass.jsonl" \
     --total-rounds 24 --tail-window 12 --slo 6.5
 
+# analyze_rounds.py v2: --auto-steady + warmup_dominated
+
+# Without --auto-steady, the warmup-dominated fixture FAILs (tail-6 = 9.17)
+check "analyze_rounds: warmup-dominated fixture, no --auto-steady -> FAIL (tail)" 1 '"primary_metric": "tail"' \
+  python3 "$HERE/analyze_rounds.py" \
+    --json "$FIX/analyze_warmup_dominated_pass.jsonl" \
+    --total-rounds 12 --tail-window 6 --slo 6.5
+
+# With --auto-steady, the same fixture detects 5-round steady at 5.0s -> PASS
+check "analyze_rounds: warmup-dominated fixture, --auto-steady -> PASS (steady)" 0 '"primary_metric": "steady"' \
+  python3 "$HERE/analyze_rounds.py" \
+    --json "$FIX/analyze_warmup_dominated_pass.jsonl" \
+    --total-rounds 12 --tail-window 6 --slo 6.5 --auto-steady
+
+check "analyze_rounds: warmup-dominated label triggers" 0 '"warmup_dominated": true' \
+  python3 "$HERE/analyze_rounds.py" \
+    --json "$FIX/analyze_warmup_dominated_pass.jsonl" \
+    --total-rounds 12 --tail-window 6 --slo 6.5 --auto-steady
+
+# Steady detected but avg over SLO -> still FAIL (algorithm is not a free pass)
+check "analyze_rounds: steady-but-over-SLO fixture, --auto-steady -> FAIL" 1 '"status": "FAIL"' \
+  python3 "$HERE/analyze_rounds.py" \
+    --json "$FIX/analyze_steady_fail.jsonl" \
+    --total-rounds 12 --tail-window 6 --slo 6.5 --auto-steady
+
 # prefix_cache_hit_rate.py
 check "prefix_cache: diff -> hit_rate 0.5, rc 0" 0 '"hit_rate": 0.5' \
   python3 "$HERE/prefix_cache_hit_rate.py" diff \

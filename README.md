@@ -6,7 +6,11 @@
 
 ## 当前 skills
 
-- `model-perf-binary-search/` — 对 LLM 推理服务做 p50 e2e 延迟 SLO 下的最大 QPS 二分搜索，支持 Mode A（调参）/ Mode B（开启新 feature 后调优）。
+- `model-perf-binary-search/` — 对 LLM 推理服务做 p50 e2e 延迟 SLO 下的最大 QPS 二分搜索，支持 Mode A（调参）/ Mode B（开启新 feature 后调优）。自有实现。
+- `perf-nsight-systems/` — nsys CLI 系统级 profile + `.nsys-rep` 分析。**Vendored from [NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/.claude/skills/perf-nsight-systems) under Apache-2.0**；仅扩展了 `description` 让推理场景关键词触发，正文保持原样。
+- `perf-analysis/` — 性能分析协调入口（瓶颈分类 + 结构化报告）。**Vendored from [NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/.claude/skills/perf-analysis) under Apache-2.0**，同样仅扩展 description。
+
+NVIDIA 上游版权声明保留在仓库根的 `LICENSE-Apache-2.0.txt`。
 
 ## 在新机器上一键应用
 

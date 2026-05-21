@@ -40,11 +40,13 @@ while IFS= read -r -d '' skill; do
     echo "WARN $name: SKILL.md is $lines lines (>500)"
   fi
 
-  # Broken relative links (one level)
-  while IFS= read -r link; do
-    target="${link#*(}"
-    target="${target%)*}"
-    if [[ "$target" == http* ]]; then continue; fi
+  # Broken relative file links (skip anchors, URLs, and inline-code false positives)
+  while IFS= read -r target; do
+    [[ "$target" == http* ]] && continue
+    [[ "$target" =~ ^# ]] && continue
+    [[ "$target" == *" "* ]] && continue
+    [[ "$target" == *,* ]] && continue
+    [[ "$target" != */* && "$target" != *.md ]] && continue
     if [[ ! -f "$dir/$target" ]]; then
       echo "FAIL $name: broken link -> $target"
       errors=$((errors + 1))

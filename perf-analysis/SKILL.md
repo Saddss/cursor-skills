@@ -22,7 +22,7 @@ metadata:
 
 > **Vendored from [NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/.claude/skills/perf-analysis) under Apache-2.0.** Only the `description` was extended with inference-server triggers; the body is verbatim. NVIDIA's copyright + license header is preserved in this fork's `LICENSE-Apache-2.0.txt`.
 >
-> **In this fork "delegate to perf-profiling-specialist" means: delegate to `perf-nsight-systems` for nsys timeline work, or to `model-perf-binary-search` for QPS-vs-SLO binary search.** NVIDIA's TRT-LLM repo ships an explicit profiling-specialist agent that routes between nsys and ncu; we have not vendored ncu yet, so kernel-level requests should be flagged as out-of-scope until the user installs Nsight Compute and we vendor `perf-nsight-compute-analysis`.
+> **In this fork "delegate to perf-profiling-specialist" means: delegate to `perf-nsight-systems` for nsys timeline work, `perf-nsight-compute-analysis` for ncu kernel analysis, or `model-perf-binary-search` for QPS-vs-SLO binary search.**
 
 # Performance Analysis
 

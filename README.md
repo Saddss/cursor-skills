@@ -11,8 +11,26 @@
 - `model-perf-binary-search/` — 对 LLM 推理服务做 p50 e2e 延迟 SLO 下的最大 QPS 二分搜索，支持 Mode A（调参）/ Mode B（开启新 feature 后调优）。自有实现。
 - `perf-analysis/` — 性能分析协调入口（瓶颈分类 + 结构化报告）。Vendored under Apache-2.0。
 - `perf-nsight-systems/` — nsys CLI 系统级 profile + `.nsys-rep` 分析（含 7 个 references）。Vendored under Apache-2.0。
+- `perf-nsight-compute-analysis/` — ncu kernel 级分析（SOL%、roofline、occupancy、`.ncu-rep`）。Vendored under Apache-2.0。
+- `perf-optimization/` — 优化协调 playbook（specialist 路由、TileIR pipeline）。Vendored under Apache-2.0。
+- `perf-workload-profiling/` — 手动 timing harness + NVTX 标注（训练 loop / standalone op）。Vendored under Apache-2.0。
 - `perf-host-analysis/` — 检测 host/CPU overhead（Phase 1 二分判定 + Phase 2 NVTX 根因）。Vendored under Apache-2.0；含 `scripts/analyze_host_overhead.py` 帮助脚本。
 - `perf-host-optimization/` — host overhead 治理（line_profiler + iterative profile-analyze-optimize-validate）。Vendored under Apache-2.0。
+- `kernel-triton-writing/` — Triton kernel 编写 + verify/benchmark 脚本。Vendored under Apache-2.0。
+- `kernel-cute-writing/` — CuTe DSL / CUTLASS kernel 编写。Vendored under Apache-2.0。
+
+### 学习与文档（anthropics/skills vendored）
+
+来自 [anthropics/skills](https://github.com/anthropics/skills)，正文 verbatim。Anthropic 专有许可证见各 skill 目录内 `LICENSE.txt` 及仓库根 `LICENSE-Anthropic-Skills.txt`。
+
+- `pdf/` — 读/写/合并 PDF，表格提取，OCR，表单填充。
+- `docx/` — Word 文档创建、编辑、tracked changes。
+- `pptx/` — PPT 读取（markitdown）、编辑、从零生成。
+
+### 代码梳理（spencerpauly/awesome-cursor-skills vendored）
+
+- `parallel-exploring/` — 并行 launch explore subagent 快速扫大仓库。
+- `codebase-onboarding/` — 并行 explore 后合成 onboarding 文档。
 
 ### 工程方法论（mattpocock/skills vendored, MIT）
 

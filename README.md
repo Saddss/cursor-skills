@@ -4,6 +4,8 @@
 
 每个子目录是一个 skill，里面必须有 `SKILL.md`。Cursor IDE / Cursor Agent 启动时会自动扫描这个目录加载所有 skills。
 
+**中文说明 + 使用示例** → 见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)
+
 ## 当前 skills（25 个）
 
 ### Serving benchmark & 容量（自有 + BBuf）

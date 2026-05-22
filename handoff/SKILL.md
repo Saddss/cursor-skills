@@ -17,7 +17,7 @@ metadata:
 
 Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the temporary directory of the user's OS — not the current workspace.
 
-Include a **Suggested skills** section listing skills the next agent should invoke (e.g. `diagnose`, `perf-analysis`, `perf-nsight-systems`).
+Include a **Suggested skills** section listing skills the next agent should invoke (e.g. `diagnose`, `perf-analysis`, `llm-serving-auto-benchmark`, `llm-torch-profiler-analysis`).
 
 Do not duplicate content already captured in other artifacts (PRDs, plans, ADRs, issues, commits, diffs). Reference them by path or URL instead.
 

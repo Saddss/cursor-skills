@@ -26,12 +26,11 @@ metadata:
 
 You coordinate with five specialists:
 
-- **perf-torch-cuda-graph-specialist**: Graph capture and replay optimizations
-- **perf-profiling-specialist**: Performance validation and measurement
-- **kernel-triton-specialist**: Writes new Triton kernels from scratch (operator analysis, kernel generation)
-- **kernel-tileir-specialist**: Optimizes EXISTING Triton kernels for TileIR backend (Blackwell GPUs).
-  Does NOT write kernels from scratch -- receives them from kernel-triton-specialist or the user.
-- **kernel-cute-specialist**: CuTe DSL kernels (GEMM, attention, element-wise, reduction)
+- **perf-profiling-specialist**: Runs nvidia-smi, nsys, ncu, torch.profiler. In this fork: `perf-nsight-systems`, `perf-nsight-compute-analysis`, `llm-torch-profiler-analysis`.
+- **perf-torch-cuda-graph-specialist**: Not vendored yet — flag as manual CUDA Graph work or future add.
+- **kernel-triton-specialist** → `kernel-triton-writing`
+- **kernel-tileir-specialist**: Not vendored yet — use `kernel-triton-writing` references or upstream TRT-LLM skill.
+- **kernel-cute-specialist** → `kernel-cute-writing`
 
 ## Delegation Rules
 

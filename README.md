@@ -4,49 +4,66 @@
 
 每个子目录是一个 skill，里面必须有 `SKILL.md`。Cursor IDE / Cursor Agent 启动时会自动扫描这个目录加载所有 skills。
 
-## 当前 skills
+## 当前 skills（25 个）
 
-### 性能 / 推理（自有 + NVIDIA vendored）
+### Serving benchmark & 容量（自有 + BBuf）
 
-- `model-perf-binary-search/` — 对 LLM 推理服务做 p50 e2e 延迟 SLO 下的最大 QPS 二分搜索，支持 Mode A（调参）/ Mode B（开启新 feature 后调优）。自有实现。
-- `perf-analysis/` — 性能分析协调入口（瓶颈分类 + 结构化报告）。Vendored under Apache-2.0。
-- `perf-nsight-systems/` — nsys CLI 系统级 profile + `.nsys-rep` 分析（含 7 个 references）。Vendored under Apache-2.0。
-- `perf-nsight-compute-analysis/` — ncu kernel 级分析（SOL%、roofline、occupancy、`.ncu-rep`）。Vendored under Apache-2.0。
-- `perf-optimization/` — 优化协调 playbook（specialist 路由、TileIR pipeline）。Vendored under Apache-2.0。
-- `perf-workload-profiling/` — 手动 timing harness + NVTX 标注（训练 loop / standalone op）。Vendored under Apache-2.0。
-- `perf-host-analysis/` — 检测 host/CPU overhead（Phase 1 二分判定 + Phase 2 NVTX 根因）。Vendored under Apache-2.0；含 `scripts/analyze_host_overhead.py` 帮助脚本。
-- `perf-host-optimization/` — host overhead 治理（line_profiler + iterative profile-analyze-optimize-validate）。Vendored under Apache-2.0。
-- `kernel-triton-writing/` — Triton kernel 编写 + verify/benchmark 脚本。Vendored under Apache-2.0。
-- `kernel-cute-writing/` — CuTe DSL / CUTLASS kernel 编写。Vendored under Apache-2.0。
+- `model-perf-binary-search/` — 已知 serve 配置下，p50 e2e SLO 的最大 QPS 二分搜索（Mode A 调参 / Mode B feature 对比）。**自有实现。**
+- `llm-serving-auto-benchmark/` — 跨框架（SGLang/vLLM/TRT-LLM）公平 benchmark + search_space 扫 launch 参数；带 cookbook YAML。**BBuf vendored。**
+- `llm-serving-capacity-planner/` — 解析 serving 启动 log → KV pool / CUDA graph / max concurrency。**BBuf vendored。**
+- `model-compute-simulation/` — 从 model config 估 FLOPs/MFU、算子 shape、TP/EP what-if。**BBuf vendored。**
 
-### 学习与文档（anthropics/skills vendored）
+典型链路：`llm-serving-auto-benchmark`（选框架+命令）→ `model-perf-binary-search`（SLO 下 QPS）→ `llm-serving-capacity-planner`（解释并发上限）。
 
-来自 [anthropics/skills](https://github.com/anthropics/skills)，正文 verbatim。Anthropic 专有许可证见各 skill 目录内 `LICENSE.txt` 及仓库根 `LICENSE-Anthropic-Skills.txt`。
+### Profiler & 性能（NVIDIA + BBuf）
 
-- `pdf/` — 读/写/合并 PDF，表格提取，OCR，表单填充。
-- `docx/` — Word 文档创建、编辑、tracked changes。
-- `pptx/` — PPT 读取（markitdown）、编辑、从零生成。
+- `perf-analysis/` — 性能分析总入口（瓶颈分类 + 结构化报告）。NVIDIA Apache-2.0。
+- `perf-nsight-systems/` — nsys 系统 timeline + `.nsys-rep`。NVIDIA。
+- `perf-nsight-compute-analysis/` — ncu kernel SOL / roofline / `.ncu-rep`。NVIDIA。
+- `perf-optimization/` — 优化协调与 specialist 路由（已映射到本 repo 内 skill）。NVIDIA。
+- `perf-workload-profiling/` — 手动 timing harness + NVTX。NVIDIA。
+- `perf-host-analysis/` — host/CPU overhead 检测（Phase 1/2）。NVIDIA。
+- `perf-host-optimization/` — host overhead 治理（line_profiler 迭代）。NVIDIA。
+- `llm-torch-profiler-analysis/` — torch.profiler 三表（kernel / overlap / fusion），prefill/decode 分离。**BBuf vendored。**
+- `llm-pipeline-analysis/` — trace 层 forward/layer 级 drill-down。**BBuf vendored。**
 
-### 代码梳理（spencerpauly/awesome-cursor-skills vendored）
+典型链路：慢 → `perf-analysis` → nsys / ncu / torch-profiler 三选一 → `llm-pipeline-analysis` 细拆 layer。
 
-- `parallel-exploring/` — 并行 launch explore subagent 快速扫大仓库。
-- `codebase-onboarding/` — 并行 explore 后合成 onboarding 文档。
+### 算子（NVIDIA）
 
-### 工程方法论（mattpocock/skills vendored, MIT）
+- `kernel-triton-writing/` — Triton 写核 + verify/benchmark 脚本。
+- `kernel-cute-writing/` — CuTe DSL / CUTLASS 写核。
 
-来自 [mattpocock/skills](https://github.com/mattpocock/skills)，正文保持原样，仅做了 Cursor 适配（去掉 Claude 专有字段、补充推理/infra 触发词）。MIT 许可证见 `LICENSE-MIT-Matt-Pocock.txt`。
+### 代码梳理（spencerpauly）
 
-- `diagnose/` — 硬 bug / 性能回归的诊断闭环：复现 → 最小化 → 假设 → 插桩 → 修复 → 回归测试。与 `perf-analysis` 互补（diagnose 偏通用调试，perf-* 偏 GPU/profile）。
-- `tdd/` — 红-绿-重构 TDD，含 `tests.md`、`mocking.md`、`deep-modules.md` 等 reference。
-- `zoom-out/` — 拉高一层看模块/调用关系，适合初次进入 vLLM scheduler、KV cache 等陌生代码区。
-- `handoff/` — 把长会话压缩成 handoff 文档，方便换 agent 继续 benchmark / profiling 任务。
-- `grill-me/` — 轻量 grilling：在动手前把设计决策树走一遍。
-- `grill-with-docs/` — 带文档的 grilling：同步更新 `CONTEXT.md` 和 ADR。
-- `improve-codebase-architecture/` — 找 deepening 机会，输出 HTML architecture review。
+- `parallel-exploring/` — 并行 explore subagent 快速扫大仓库。
+- `codebase-onboarding/` — 并行 explore 后合成 onboarding 文档（含 zoom-out 场景）。
 
-所有 vendored skills 来自 [NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/.claude/skills)（PR #12831，2026-04 合并），仅扩展了 front-matter 的 `description` 加入推理场景触发关键词，正文保持原样。上游版权声明保留在仓库根的 `LICENSE-Apache-2.0.txt`。
+### 工程方法论（mattpocock, MIT）
 
-> TRT-LLM 专有的 references 文件（`perf-host-analysis/references/trtllm-nvtx-ranges.md` 和 `perf-host-optimization/references/hot-path-files.md`）在每个 SKILL.md 顶部都有显式说明，方法论通用，具体文件名 / NVTX label 需要按 vLLM / SGLang 替换。
+- `diagnose/` — 通用 bug/回归诊断闭环（与 perf-* 互补）。
+- `tdd/` — 红-绿-重构 TDD。
+- `handoff/` — 长 session 交接文档。
+- `grill-with-docs/` — 带 CONTEXT.md/ADR 的深度 grilling（**已移除冗余的 `grill-me`**）。
+- `improve-codebase-architecture/` — deepening 机会 + HTML architecture review。
+
+### 学习与文档（anthropics）
+
+- `pdf/` `docx/` `pptx/` — 读/写 PDF、Word、PPT。
+
+## 已移除的低价值 / 冗余 skill
+
+| 移除 | 原因 |
+|------|------|
+| `grill-me` | `grill-with-docs` 的严格子集；infra 大改应带文档 |
+| `zoom-out` | 单行指令，已被 `codebase-onboarding` + `parallel-exploring` 覆盖 |
+
+## 许可证
+
+- NVIDIA skills：`LICENSE-Apache-2.0.txt`
+- mattpocock：`LICENSE-MIT-Matt-Pocock.txt`
+- anthropics：各 skill 内 `LICENSE.txt` + `LICENSE-Anthropic-Skills.txt`
+- BBuf：上游 [BBuf/AI-Infra-Auto-Driven-SKILLS](https://github.com/BBuf/AI-Infra-Auto-Driven-SKILLS)（无单独 LICENSE 文件，保留 upstream metadata）
 
 ## 在新机器上一键应用
 
@@ -63,7 +80,7 @@ mkdir -p ~/.local/bin && cd /tmp \
   && export PATH="$HOME/.local/bin:$PATH"
 ```
 
-然后登录（按提示选 GitHub.com → HTTPS → Yes → Login with a web browser，浏览器输 device code）：
+然后登录：
 
 ```bash
 gh auth login
@@ -72,7 +89,6 @@ gh auth login
 ### 同步本仓库到 `~/.cursor/skills/`
 
 ```bash
-# 如果 ~/.cursor/skills 已经有东西，先备份
 [ -d ~/.cursor/skills ] && [ -n "$(ls -A ~/.cursor/skills 2>/dev/null)" ] \
   && mv ~/.cursor/skills ~/.cursor/skills.bak.$(date +%s)
 
@@ -83,27 +99,20 @@ gh repo clone Saddss/cursor-skills ~/.cursor/skills
 
 ## 日常维护
 
-修改 / 新增 skill 后，先跑校验再提交：
-
 ```bash
 cd ~/.cursor/skills
 bash scripts/validate-skills.sh
 git add -A && git commit -m "describe change" && git push
 ```
 
-在其他机器拉取最新：
+在其他机器：`cd ~/.cursor/skills && git pull`
 
-```bash
-cd ~/.cursor/skills && git pull
-```
-
-## 新建 skill 的最低骨架
+## 新建 skill 骨架
 
 ```
 ~/.cursor/skills/<skill-name>/
-├── SKILL.md          # 必需。开头是 --- YAML front-matter --- 含 name + description
-└── scripts/          # 可选，放 helper 脚本
-    └── *.py
+├── SKILL.md          # --- YAML front-matter: name + description ---
+└── scripts/          # 可选
 ```
 
-`SKILL.md` 顶部的 YAML front-matter 是 Cursor Agent 判断"什么时候触发这个 skill"的关键，参考现有 `model-perf-binary-search/SKILL.md` 的写法即可。
+参考 `model-perf-binary-search/SKILL.md` 或 BBuf skill 的脚本化写法。

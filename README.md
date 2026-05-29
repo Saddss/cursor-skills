@@ -6,7 +6,7 @@
 
 **中文说明 + 使用示例** → 见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)
 
-## 当前 skills（25 个）
+## 当前 skills（31 个）
 
 ### Serving benchmark & 容量（自有 + BBuf）
 
@@ -41,13 +41,21 @@
 - `parallel-exploring/` — 并行 explore subagent 快速扫大仓库。
 - `codebase-onboarding/` — 并行 explore 后合成 onboarding 文档（含 zoom-out 场景）。
 
-### 工程方法论（mattpocock, MIT）
+### 工程方法论（mattpocock + superpowers/ECC/Every, MIT）
 
+- `search-first/` — 写代码前先搜 repo/框架/库；Adopt/Extend/Build。**ECC vendored。**
+- `brainstorming/` — 动代码前设计 + user approve。**Superpowers vendored。**
+- `writing-plans/` — spec → bite-sized 实施计划。**Superpowers vendored。**
+- `executing-plans/` — 按计划逐步执行 + checkpoint。**Superpowers vendored。**
+- `simplify-code/` — PR 前简化 branch diff，行为不变。**EveryInc vendored（原 ce-simplify-code）。**
+- `verification-before-completion/` — 声称完成前必须有命令证据。**Superpowers vendored。**
 - `diagnose/` — 通用 bug/回归诊断闭环（与 perf-* 互补）。
 - `tdd/` — 红-绿-重构 TDD。
 - `handoff/` — 长 session 交接文档。
 - `grill-with-docs/` — 带 CONTEXT.md/ADR 的深度 grilling（**已移除冗余的 `grill-me`**）。
 - `improve-codebase-architecture/` — deepening 机会 + HTML architecture review。
+
+成熟框架加功能典型链路：`search-first` → `brainstorming` → `writing-plans` → `executing-plans` + `tdd` → `simplify-code` → `verification-before-completion`。
 
 ### 学习与文档（anthropics）
 
@@ -64,6 +72,9 @@
 
 - NVIDIA skills：`LICENSE-Apache-2.0.txt`
 - mattpocock：`LICENSE-MIT-Matt-Pocock.txt`
+- Superpowers (obra)：`LICENSE-MIT-Superpowers.txt` — `brainstorming`, `writing-plans`, `executing-plans`, `verification-before-completion`
+- Everything Claude Code (ECC)：`LICENSE-MIT-ECC.txt` — `search-first`
+- EveryInc (Compound Engineering)：`LICENSE-MIT-EveryInc.txt` — `simplify-code`
 - anthropics：各 skill 内 `LICENSE.txt` + `LICENSE-Anthropic-Skills.txt`
 - BBuf：上游 [BBuf/AI-Infra-Auto-Driven-SKILLS](https://github.com/BBuf/AI-Infra-Auto-Driven-SKILLS)（无单独 LICENSE 文件，保留 upstream metadata）
 

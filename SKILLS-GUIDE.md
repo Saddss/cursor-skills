@@ -1,6 +1,6 @@
 # Skills 使用指南
 
-本仓库共 **25 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **31 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
 
 ## 怎么触发
 
@@ -270,6 +270,97 @@ python3 scripts/layer_timeline_analyzer.py \
 
 ## 五、工程方法论
 
+### 成熟框架加功能（推荐链路）
+
+往 vLLM / SGLang / TRT-LLM / benchmark harness 等**已有大量惯例的仓库**加功能时，按顺序用：
+
+```text
+parallel-exploring / search-first  → 找现有实现和扩展点
+brainstorming / grill-with-docs    → 设计 + 你 approve
+writing-plans                      → 按文件拆 bite-sized task
+executing-plans + tdd              → 逐步实施
+simplify-code                      → PR 前收 diff
+verification-before-completion     → 有证据再 say done
+```
+
+---
+
+### `search-first`
+
+**干什么**：**写代码前先搜**——仓库内 `rg`、框架 API/插件/registry、PyPI/npm、GitHub；Adopt / Extend / Build 决策矩阵。成熟框架加功能时的 **第一步**。
+
+**示例**：
+```text
+@search-first
+要在 vLLM 里加一个 custom op，先找 repo 里类似 op 怎么注册、测试怎么写，再决定 extend 还是新写。
+```
+
+---
+
+### `brainstorming`
+
+**干什么**：**动代码前**把想法磨成设计/spec——逐条提问、2–3 种方案、分段 present、**用户 approve 前禁止写代码**。适合「看起来简单其实容易绕远」的 feature。
+
+**示例**：
+```text
+@brainstorming
+我想给 benchmark harness 加 prefix-cache hit rate 统计，先 brainstorm：入口放哪、和现有 metrics 怎么对齐。
+```
+
+Spec 默认写到 `docs/specs/YYYY-MM-DD-<topic>-design.md`。
+
+---
+
+### `writing-plans`
+
+**干什么**：有 approved spec 后，写 **bite-sized 实施计划**（精确路径、完整代码片段、命令 + 期望输出）。强调 **follow established patterns**，不擅自重构大文件。
+
+**示例**：
+```text
+@writing-plans
+spec 在 docs/specs/2026-05-29-kv-cache-metrics-design.md，帮我写 implementation plan。
+```
+
+Plan 默认写到 `docs/plans/YYYY-MM-DD-<feature>.md`。
+
+---
+
+### `executing-plans`
+
+**干什么**：按 plan **逐步执行**，每步跑 verification；blocked 就停、不猜。完成后接 `verification-before-completion`。
+
+**示例**：
+```text
+@executing-plans
+按 docs/plans/2026-05-29-kv-cache-metrics.md 实施，inline 执行，每 task 完 checkpoint。
+```
+
+---
+
+### `simplify-code`
+
+**干什么**：对 **branch diff** 做三轮审查（复用 / 质量 / 效率），简化冗余代码但 **行为不变**；PR 前用。Fewer lines 不是目标，更快读懂才是。
+
+**示例**：
+```text
+@simplify-code
+feature 分支写完了，帮我把相对 origin/main 的 diff 简化一遍，然后跑相关测试。
+```
+
+---
+
+### `verification-before-completion`
+
+**干什么**：声称「完成 / 测试通过 / bug 修了」之前，**必须先跑命令并贴证据**。禁止 "should pass" / "looks good"。
+
+**示例**：
+```text
+@verification-before-completion
+改完 online_replay.py 了，提交前帮我跑测试并确认输出再汇报。
+```
+
+---
+
 ### `diagnose`
 
 **干什么**：**通用硬 bug / 性能回归** 诊断闭环——建 feedback loop → 复现 → 假设 → 插桩 → 修复 → 回归测试。和 `perf-*` 互补（更偏逻辑 bug、flaky、配置回归）。
@@ -400,6 +491,18 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 3. @perf-nsight-compute-analysis → ncu 验证优化效果
 ```
 
+### 往成熟框架加功能（vLLM / SGLang / harness patch）
+
+```text
+1. @search-first             → 找同类实现 + 扩展点
+2. @parallel-exploring       → 大仓库并行扫（可选）
+3. @brainstorming            → 设计 + approve（大改用 @grill-with-docs）
+4. @writing-plans            → bite-sized plan
+5. @executing-plans + @tdd   → 实施
+6. @simplify-code            → PR 前收 diff
+7. @verification-before-completion → 有证据再 done
+```
+
 ### 写调研报告
 
 ```text
@@ -427,6 +530,12 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 | 写 Triton kernel | `kernel-triton-writing` |
 | 写 CuTe/CUTLASS kernel | `kernel-cute-writing` |
 | 第一次进大仓库 | `codebase-onboarding` / `parallel-exploring` |
+| 加功能前先搜现有模式 | `search-first` |
+| 动代码前先设计 | `brainstorming` |
+| spec → 实施计划 | `writing-plans` |
+| 按计划逐步做 | `executing-plans` |
+| PR 前简化 diff | `simplify-code` |
+| 说「完成了」之前 | `verification-before-completion` |
 | 大改前先对齐方案 | `grill-with-docs` |
 | bug / 回归 | `diagnose` |
 | 写测试/脚本 | `tdd` |

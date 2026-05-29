@@ -6,7 +6,7 @@
 
 **中文说明 + 使用示例** → 见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)
 
-## 当前 skills（31 个）
+## 当前 skills（35 个）
 
 ### Serving benchmark & 容量（自有 + BBuf）
 
@@ -54,8 +54,12 @@
 - `handoff/` — 长 session 交接文档。
 - `grill-with-docs/` — 带 CONTEXT.md/ADR 的深度 grilling（**已移除冗余的 `grill-me`**）。
 - `improve-codebase-architecture/` — deepening 机会 + HTML architecture review。
+- `setup-matt-pocock-skills/` — 目标 repo 配 `docs/agents/`（issue tracker、triage、domain）。**mattpocock vendored。**
+- `to-issues/` — plan → vertical-slice GitHub issues。**mattpocock vendored。**
+- `prototype/` — throwaway 原型（logic TUI / UI variants）。**mattpocock vendored。**
+- `review/` — Standards + Spec 双轴 branch review。**mattpocock vendored（in-progress upstream）。**
 
-成熟框架加功能典型链路：`search-first` → `brainstorming` → `writing-plans` → `executing-plans` + `tdd` → `simplify-code` → `verification-before-completion`。
+成熟框架加功能典型链路：`search-first` → `prototype?` → `brainstorming` → `writing-plans` → `to-issues?` → `executing-plans` + `tdd` → `review` + `simplify-code` → `verification-before-completion`。
 
 ### 学习与文档（anthropics）
 
@@ -71,7 +75,7 @@
 ## 许可证
 
 - NVIDIA skills：`LICENSE-Apache-2.0.txt`
-- mattpocock：`LICENSE-MIT-Matt-Pocock.txt`
+- mattpocock：`LICENSE-MIT-Matt-Pocock.txt` — `diagnose`, `tdd`, `grill-with-docs`, `improve-codebase-architecture`, `handoff`, `setup-matt-pocock-skills`, `to-issues`, `prototype`, `review`
 - Superpowers (obra)：`LICENSE-MIT-Superpowers.txt` — `brainstorming`, `writing-plans`, `executing-plans`, `verification-before-completion`
 - Everything Claude Code (ECC)：`LICENSE-MIT-ECC.txt` — `search-first`
 - EveryInc (Compound Engineering)：`LICENSE-MIT-EveryInc.txt` — `simplify-code`

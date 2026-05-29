@@ -1,6 +1,6 @@
 # Skills 使用指南
 
-本仓库共 **31 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **35 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
 
 ## 怎么触发
 
@@ -275,11 +275,14 @@ python3 scripts/layer_timeline_analyzer.py \
 往 vLLM / SGLang / TRT-LLM / benchmark harness 等**已有大量惯例的仓库**加功能时，按顺序用：
 
 ```text
+setup-matt-pocock-skills           → 目标 repo 首次：docs/agents/ 配置（一次性）
 parallel-exploring / search-first  → 找现有实现和扩展点
+prototype                          → routing/状态机 等先 throwaway 验证（可选）
 brainstorming / grill-with-docs    → 设计 + 你 approve
 writing-plans                      → 按文件拆 bite-sized task
+to-issues                          → 大 feature 拆 vertical-slice GitHub issues（可选）
 executing-plans + tdd              → 逐步实施
-simplify-code                      → PR 前收 diff
+review + simplify-code             → PR 前：对照 spec/CONTRIBUTING + 收 diff
 verification-before-completion     → 有证据再 say done
 ```
 
@@ -357,6 +360,54 @@ feature 分支写完了，帮我把相对 origin/main 的 diff 简化一遍，�
 ```text
 @verification-before-completion
 改完 online_replay.py 了，提交前帮我跑测试并确认输出再汇报。
+```
+
+---
+
+### `setup-matt-pocock-skills`
+
+**干什么**：在**目标代码仓库**（非 skills 仓库）一次性 scaffold `docs/agents/`——issue tracker 用法、triage 标签映射、CONTEXT/ADR 布局。`to-issues` / `review` 的前置步骤。
+
+**示例**：
+```text
+@setup-matt-pocock-skills
+在 production-stack 仓库配好 GitHub issue + triage 标签，写进 docs/agents/。
+```
+
+---
+
+### `to-issues`
+
+**干什么**：把 plan/PRD 拆成 **vertical-slice GitHub issues**（AFK/HITL、依赖关系、acceptance criteria）。适合多 PR 大 feature、benchmark study、routing 改造。
+
+**示例**：
+```text
+@to-issues
+把 docs/plans/cache-aware-overload-routing.md 拆成 4 个 AFK issue，标 ready-for-agent。
+```
+
+---
+
+### `prototype`
+
+**干什么**：**可丢弃原型**——终端 TUI 验证 state machine / routing 策略（[LOGIC.md](prototype/LOGIC.md)），或单页多 UI 方案（[UI.md](prototype/UI.md)）。回答一个问题后删壳、保留结论。
+
+**示例**：
+```text
+@prototype
+用终端 TUI 原型验证 cache-aware overload routing 的状态转移，再写进 production-stack。
+```
+
+---
+
+### `review`
+
+**干什么**：**双轴 PR 审查**——Standards（CONTRIBUTING/CONTEXT/ADR）与 Spec（issue/plan）并行 subagent，对照 `git diff main...HEAD` 分别报告，不混轴。
+
+**示例**：
+```text
+@review
+review 当前分支相对 main 的改动，spec 对照 #42 和 docs/plans/cache-aware-routing.md。
 ```
 
 ---
@@ -494,13 +545,16 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 ### 往成熟框架加功能（vLLM / SGLang / harness patch）
 
 ```text
+0. @setup-matt-pocock-skills → 目标 repo 首次配置（可选）
 1. @search-first             → 找同类实现 + 扩展点
 2. @parallel-exploring       → 大仓库并行扫（可选）
-3. @brainstorming            → 设计 + approve（大改用 @grill-with-docs）
-4. @writing-plans            → bite-sized plan
-5. @executing-plans + @tdd   → 实施
-6. @simplify-code            → PR 前收 diff
-7. @verification-before-completion → 有证据再 done
+3. @prototype                → routing/状态机先验证（可选）
+4. @brainstorming            → 设计 + approve（大改用 @grill-with-docs）
+5. @writing-plans            → bite-sized plan
+6. @to-issues                → 拆 GitHub issues（多 PR 时）
+7. @executing-plans + @tdd   → 实施
+8. @review + @simplify-code  → PR 前审查
+9. @verification-before-completion → 有证据再 done
 ```
 
 ### 写调研报告
@@ -534,6 +588,10 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 | 动代码前先设计 | `brainstorming` |
 | spec → 实施计划 | `writing-plans` |
 | 按计划逐步做 | `executing-plans` |
+| 目标 repo 配 issue/ADR | `setup-matt-pocock-skills` |
+| plan 拆 GitHub issues | `to-issues` |
+| 验证 routing/状态机 | `prototype` |
+| PR 双轴审查 | `review` |
 | PR 前简化 diff | `simplify-code` |
 | 说「完成了」之前 | `verification-before-completion` |
 | 大改前先对齐方案 | `grill-with-docs` |

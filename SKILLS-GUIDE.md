@@ -1,6 +1,8 @@
 # Skills 使用指南
 
-本仓库共 **35 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **36 个** skill，源文件在 `~/.cursor/cursor-skills/skills/`（运行时经 symlink 暴露在 `~/.cursor/skills/`）。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+
+**4 条全局 Rules**（自动生效，无需 @）→ [RULES-GUIDE.md](RULES-GUIDE.md)
 
 ## 怎么触发
 
@@ -284,6 +286,18 @@ to-issues                          → 大 feature 拆 vertical-slice GitHub iss
 executing-plans + tdd              → 逐步实施
 review + simplify-code             → PR 前：对照 spec/CONTRIBUTING + 收 diff
 verification-before-completion     → 有证据再 say done
+```
+
+---
+
+### `karpathy-guidelines`
+
+**干什么**：与全局 rule `karpathy-guidelines` 相同——[Karpathy 四条](https://github.com/multica-ai/andrej-karpathy-skills)：先澄清假设、极简实现、只改必要代码、用可验证标准收尾。Rule 已 **alwaysApply**；本 skill 用于长任务开头主动 `@` 强调。
+
+**示例**：
+```text
+@karpathy-guidelines
+接下来改 production-stack 路由：先列出假设和 tradeoff，别过度抽象，每步给可验证的检查点。
 ```
 
 ---
@@ -599,3 +613,4 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 | 写测试/脚本 | `tdd` |
 | 换 agent 继续 | `handoff` |
 | 读 PDF/PPT/Word | `pdf` / `pptx` / `docx` |
+| 强调极简/手术式改动（rule 已默认开） | `@karpathy-guidelines` |

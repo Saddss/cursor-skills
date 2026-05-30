@@ -1,12 +1,136 @@
-# My Cursor Agent Skills
+# My Cursor Agent Skills & Rules
 
-我的 Cursor Agent skills 仓库，放在 `~/.cursor/skills/`。
+我的 Cursor 配置仓库：[**Saddss/cursor-skills**](https://github.com/Saddss/cursor-skills)
 
-每个子目录是一个 skill，里面必须有 `SKILL.md`。Cursor IDE / Cursor Agent 启动时会自动扫描这个目录加载所有 skills。
+| 文档 | 内容 |
+|------|------|
+| [SKILLS-GUIDE.md](SKILLS-GUIDE.md) | **36** 个 skill：触发方式、示例、速查表 |
+| [RULES-GUIDE.md](RULES-GUIDE.md) | **4** 条 rule：作用、与 skill 区别、速查表 |
 
-**中文说明 + 使用示例** → 见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)
+---
 
-## 当前 skills（35 个）
+## 快速开始（新机器）
+
+**1. 安装 gh 并登录**（若尚未安装，见下方 [一次性准备](#一次性准备gh)）。
+
+**2. Clone 并链到 Cursor 目录**
+
+```bash
+gh repo clone Saddss/cursor-skills ~/.cursor/cursor-skills
+bash ~/.cursor/cursor-skills/scripts/install.sh
+```
+
+`install.sh` 会创建两个**同级** symlink（与 Cursor 目录模型一致）：
+
+```text
+~/.cursor/skills  →  cursor-skills/skills
+~/.cursor/rules   →  cursor-skills/rules
+```
+
+**3. 重启 Cursor**（或新开 Agent 对话）。
+
+**4. 验证**
+
+```bash
+readlink ~/.cursor/skills ~/.cursor/rules
+ls ~/.cursor/cursor-skills/skills | wc -l   # 36
+ls ~/.cursor/cursor-skills/rules/*.mdc      # 4
+```
+
+- **Settings → Rules**：应看到 4 条全局 rule（自动 `alwaysApply`）。
+- 对话里试：`@model-perf-binary-search 简述你能做什么` 或 `@perf-analysis`。
+
+**5. 日常改配置**
+
+```bash
+cd ~/.cursor/cursor-skills
+# 编辑 skills/<name>/ 或 rules/*.mdc
+git add -A && git commit -m "..." && git push
+```
+
+其他机器：`git pull` 即可（symlink 指向仓库，无需重复 `install.sh`，除非链接断了）。
+
+---
+
+## 从旧版布局升级（重构前已在用的机器）
+
+旧版：`~/.cursor/skills` **就是 git 根**，skill 目录在仓库顶层。  
+新版：git 根为 `~/.cursor/cursor-skills/`，其下 **`skills/` 与 `rules/` 同级**。
+
+**不要**在旧路径上只 `git pull`（会导致 skill 进 `skills/` 子目录，而 Cursor 仍扫 `~/.cursor/skills/*`，路径对不上）。
+
+**推荐：一条迁移脚本**
+
+```bash
+# 需已 push 含 skills/ + rules/ 的最新 main 到 GitHub
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Saddss/cursor-skills/main/scripts/migrate-from-legacy-layout.sh)" 2>/dev/null \
+  || bash ~/.cursor/cursor-skills/scripts/migrate-from-legacy-layout.sh
+```
+
+或本机已有 clone 时：
+
+```bash
+bash ~/.cursor/cursor-skills/scripts/migrate-from-legacy-layout.sh
+```
+
+脚本会：把旧 `~/.cursor/skills`（若为 git 根）改名为 `cursor-skills` → `git pull` → 运行 `install.sh`。
+
+**手动迁移（无脚本时）**
+
+```bash
+# 1) 备份旧仓库（若在 ~/.cursor/skills 且含 .git）
+mv ~/.cursor/skills ~/.cursor/cursor-skills
+
+# 2) 拉最新结构
+cd ~/.cursor/cursor-skills && git fetch origin && git pull
+
+# 3) 安装 symlink（若 ~/.cursor/skills 已被 mv 走，install 会新建链接）
+bash scripts/install.sh
+
+# 4) 重启 Cursor
+```
+
+本地有未提交改动时，先在旧目录 `git stash`，迁移后再 `git stash pop`。
+
+---
+
+## 仓库布局
+
+```text
+~/.cursor/
+├── cursor-skills/          ← git clone 根目录（在这里 commit）
+│   ├── skills/             ← 36 个 skill
+│   ├── rules/              ← 4 个 .mdc
+│   ├── scripts/
+│   │   ├── install.sh
+│   │   ├── migrate-from-legacy-layout.sh
+│   │   ├── validate-skills.sh
+│   │   └── validate-rules.sh
+│   ├── README.md           ← 本文件
+│   ├── SKILLS-GUIDE.md
+│   └── RULES-GUIDE.md
+├── skills  → cursor-skills/skills
+└── rules   → cursor-skills/rules
+```
+
+---
+
+## 当前 rules（4 个）
+
+详见 [RULES-GUIDE.md](RULES-GUIDE.md)。
+
+| 文件 | 作用 |
+|------|------|
+| `rules/no-cursor-in-commits.mdc` | commit/PR 禁止 Cursor 署名与 trailer |
+| `rules/git-feature-branch-before-commit.mdc` | 提交前必须先切 feature 分支 |
+| `rules/confirm-before-kill-or-cleanup.mdc` | 有容器或磁盘紧张时，kill/清理须先征得同意 |
+| `rules/karpathy-guidelines.mdc` | Karpathy 四条：先想清楚、极简、手术式改动、可验证目标 |
+
+---
+
+## 当前 skills（36 个）
+
+详见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)（含示例与速查表）。
 
 ### Serving benchmark & 容量（自有 + BBuf）
 
@@ -15,78 +139,53 @@
 - `llm-serving-capacity-planner/` — 解析 serving 启动 log → KV pool / CUDA graph / max concurrency。**BBuf vendored。**
 - `model-compute-simulation/` — 从 model config 估 FLOPs/MFU、算子 shape、TP/EP what-if。**BBuf vendored。**
 
-典型链路：`llm-serving-auto-benchmark`（选框架+命令）→ `model-perf-binary-search`（SLO 下 QPS）→ `llm-serving-capacity-planner`（解释并发上限）。
+典型链路：`llm-serving-auto-benchmark` → `model-perf-binary-search` → `llm-serving-capacity-planner`。
 
 ### Profiler & 性能（NVIDIA + BBuf）
 
-- `perf-analysis/` — 性能分析总入口（瓶颈分类 + 结构化报告）。NVIDIA Apache-2.0。
-- `perf-nsight-systems/` — nsys 系统 timeline + `.nsys-rep`。NVIDIA。
-- `perf-nsight-compute-analysis/` — ncu kernel SOL / roofline / `.ncu-rep`。NVIDIA。
-- `perf-optimization/` — 优化协调与 specialist 路由（已映射到本 repo 内 skill）。NVIDIA。
-- `perf-workload-profiling/` — 手动 timing harness + NVTX。NVIDIA。
-- `perf-host-analysis/` — host/CPU overhead 检测（Phase 1/2）。NVIDIA。
-- `perf-host-optimization/` — host overhead 治理（line_profiler 迭代）。NVIDIA。
-- `llm-torch-profiler-analysis/` — torch.profiler 三表（kernel / overlap / fusion），prefill/decode 分离。**BBuf vendored。**
-- `llm-pipeline-analysis/` — trace 层 forward/layer 级 drill-down。**BBuf vendored。**
+- `perf-analysis/`, `perf-nsight-systems/`, `perf-nsight-compute-analysis/`, `perf-optimization/`, `perf-workload-profiling/`, `perf-host-analysis/`, `perf-host-optimization/`, `llm-torch-profiler-analysis/`, `llm-pipeline-analysis/`
 
-典型链路：慢 → `perf-analysis` → nsys / ncu / torch-profiler 三选一 → `llm-pipeline-analysis` 细拆 layer。
+典型链路：慢 → `perf-analysis` → nsys / ncu / torch-profiler → `llm-pipeline-analysis`。
 
 ### 算子（NVIDIA）
 
-- `kernel-triton-writing/` — Triton 写核 + verify/benchmark 脚本。
-- `kernel-cute-writing/` — CuTe DSL / CUTLASS 写核。
+- `kernel-triton-writing/`, `kernel-cute-writing/`
 
 ### 代码梳理（spencerpauly）
 
-- `parallel-exploring/` — 并行 explore subagent 快速扫大仓库。
-- `codebase-onboarding/` — 并行 explore 后合成 onboarding 文档（含 zoom-out 场景）。
+- `parallel-exploring/`, `codebase-onboarding/`
 
 ### 工程方法论（mattpocock + superpowers/ECC/Every, MIT）
 
-- `search-first/` — 写代码前先搜 repo/框架/库；Adopt/Extend/Build。**ECC vendored。**
-- `brainstorming/` — 动代码前设计 + user approve。**Superpowers vendored。**
-- `writing-plans/` — spec → bite-sized 实施计划。**Superpowers vendored。**
-- `executing-plans/` — 按计划逐步执行 + checkpoint。**Superpowers vendored。**
-- `simplify-code/` — PR 前简化 branch diff，行为不变。**EveryInc vendored（原 ce-simplify-code）。**
-- `verification-before-completion/` — 声称完成前必须有命令证据。**Superpowers vendored。**
-- `diagnose/` — 通用 bug/回归诊断闭环（与 perf-* 互补）。
-- `tdd/` — 红-绿-重构 TDD。
-- `handoff/` — 长 session 交接文档。
-- `grill-with-docs/` — 带 CONTEXT.md/ADR 的深度 grilling（**已移除冗余的 `grill-me`**）。
-- `improve-codebase-architecture/` — deepening 机会 + HTML architecture review。
-- `setup-matt-pocock-skills/` — 目标 repo 配 `docs/agents/`（issue tracker、triage、domain）。**mattpocock vendored。**
-- `to-issues/` — plan → vertical-slice GitHub issues。**mattpocock vendored。**
-- `prototype/` — throwaway 原型（logic TUI / UI variants）。**mattpocock vendored。**
-- `review/` — Standards + Spec 双轴 branch review。**mattpocock vendored（in-progress upstream）。**
+- `search-first/`, `brainstorming/`, `writing-plans/`, `executing-plans/`, `simplify-code/`, `verification-before-completion/`, `diagnose/`, `tdd/`, `handoff/`, `grill-with-docs/`, `improve-codebase-architecture/`, `setup-matt-pocock-skills/`, `to-issues/`, `prototype/`, `review/`, `karpathy-guidelines/`
 
-成熟框架加功能典型链路：`search-first` → `prototype?` → `brainstorming` → `writing-plans` → `to-issues?` → `executing-plans` + `tdd` → `review` + `simplify-code` → `verification-before-completion`。
+典型链路：`search-first` → `brainstorming` → `writing-plans` → `executing-plans` + `tdd` → `review` + `simplify-code` → `verification-before-completion`。
+
+> `karpathy-guidelines` 同时有全局 **rule**（自动生效）；skill 用于 `@` 强调，见 [RULES-GUIDE.md](RULES-GUIDE.md)。
 
 ### 学习与文档（anthropics）
 
-- `pdf/` `docx/` `pptx/` — 读/写 PDF、Word、PPT。
+- `pdf/`, `docx/`, `pptx/`
 
 ## 已移除的低价值 / 冗余 skill
 
 | 移除 | 原因 |
 |------|------|
-| `grill-me` | `grill-with-docs` 的严格子集；infra 大改应带文档 |
-| `zoom-out` | 单行指令，已被 `codebase-onboarding` + `parallel-exploring` 覆盖 |
+| `grill-me` | `grill-with-docs` 的严格子集 |
+| `zoom-out` | 已被 `codebase-onboarding` + `parallel-exploring` 覆盖 |
 
 ## 许可证
 
 - NVIDIA skills：`LICENSE-Apache-2.0.txt`
-- mattpocock：`LICENSE-MIT-Matt-Pocock.txt` — `diagnose`, `tdd`, `grill-with-docs`, `improve-codebase-architecture`, `handoff`, `setup-matt-pocock-skills`, `to-issues`, `prototype`, `review`
-- Superpowers (obra)：`LICENSE-MIT-Superpowers.txt` — `brainstorming`, `writing-plans`, `executing-plans`, `verification-before-completion`
-- Everything Claude Code (ECC)：`LICENSE-MIT-ECC.txt` — `search-first`
-- EveryInc (Compound Engineering)：`LICENSE-MIT-EveryInc.txt` — `simplify-code`
+- mattpocock：`LICENSE-MIT-Matt-Pocock.txt`
+- Superpowers：`LICENSE-MIT-Superpowers.txt`
+- ECC：`LICENSE-MIT-ECC.txt`
+- EveryInc：`LICENSE-MIT-EveryInc.txt`
 - anthropics：各 skill 内 `LICENSE.txt` + `LICENSE-Anthropic-Skills.txt`
-- BBuf：上游 [BBuf/AI-Infra-Auto-Driven-SKILLS](https://github.com/BBuf/AI-Infra-Auto-Driven-SKILLS)（无单独 LICENSE 文件，保留 upstream metadata）
+- BBuf：上游 [BBuf/AI-Infra-Auto-Driven-SKILLS](https://github.com/BBuf/AI-Infra-Auto-Driven-SKILLS)
+- Karpathy guidelines：MIT（[andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills)）
 
-## 在新机器上一键应用
-
-### 一次性准备（任何新机器都要做一次）
-
-如果新机器还没装 `gh` CLI：
+## 一次性准备（gh）
 
 ```bash
 mkdir -p ~/.local/bin && cd /tmp \
@@ -95,41 +194,25 @@ mkdir -p ~/.local/bin && cd /tmp \
   && chmod +x ~/.local/bin/gh && rm -rf gh.tgz gh_2.62.0_linux_amd64 \
   && grep -q '.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc \
   && export PATH="$HOME/.local/bin:$PATH"
-```
 
-然后登录：
-
-```bash
 gh auth login
 ```
-
-### 同步本仓库到 `~/.cursor/skills/`
-
-```bash
-[ -d ~/.cursor/skills ] && [ -n "$(ls -A ~/.cursor/skills 2>/dev/null)" ] \
-  && mv ~/.cursor/skills ~/.cursor/skills.bak.$(date +%s)
-
-gh repo clone Saddss/cursor-skills ~/.cursor/skills
-```
-
-重启 Cursor IDE / Cursor Agent，skills 就被加载了。
 
 ## 日常维护
 
 ```bash
-cd ~/.cursor/skills
+cd ~/.cursor/cursor-skills
 bash scripts/validate-skills.sh
+bash scripts/validate-rules.sh
 git add -A && git commit -m "describe change" && git push
 ```
 
-在其他机器：`cd ~/.cursor/skills && git pull`
-
 ## 新建 skill 骨架
 
-```
-~/.cursor/skills/<skill-name>/
-├── SKILL.md          # --- YAML front-matter: name + description ---
+```text
+~/.cursor/cursor-skills/skills/<skill-name>/
+├── SKILL.md          # frontmatter: name + description
 └── scripts/          # 可选
 ```
 
-参考 `model-perf-binary-search/SKILL.md` 或 BBuf skill 的脚本化写法。
+参考 `skills/model-perf-binary-search/SKILL.md`。

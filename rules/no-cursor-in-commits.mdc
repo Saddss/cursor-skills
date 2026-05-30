@@ -1,0 +1,32 @@
+---
+description: Git 提交不得包含 Cursor 相关字样或 trailer
+alwaysApply: true
+---
+
+# Git 提交禁止 Cursor 痕迹
+
+创建或改写 git commit 时，**不得**出现任何 Cursor 相关字样，包括但不限于：
+
+- `Co-authored-by: Cursor`
+- `cursoragent@cursor.com`
+- commit message 正文里的 "Cursor" / "cursor"
+- PR 描述里替用户署名 Cursor
+
+## 要求
+
+1. **Author / Committer** 只用用户指定的身份；未指定时先问，不要用占位符或工具默认身份。
+2. **Commit message** 只写改动本身（what / why），不加 AI、Agent、Cursor 等 attribution。
+3. 若发现 commit 里被 hook 或工具自动加了 Cursor trailer，**立即 amend / rebase 清掉**，再汇报完成。
+4. 用户明确要求 commit 时，完成后用 `git log -1 --format=%B` 自检无 cursor 字眼。
+
+## 示例
+
+```text
+# ❌ 禁止
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
+# ✅ 正确
+[Bugfix][Gemma4] Fix ModelOpt mixed-precision MoE quant lookup
+
+Align quantized_layers keys with runtime FusedMoE prefix.
+```

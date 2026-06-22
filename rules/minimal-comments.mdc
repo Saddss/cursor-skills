@@ -1,0 +1,48 @@
+---
+description: 向成熟框架提 PR 时的注释规范，避免 reviewer 反复挑 "comment redundant / agent-flavored"
+alwaysApply: true
+---
+
+# 注释规范：单一来源的 WHY，不复述 WHAT
+
+依据（实测，非臆断）：
+
+- vLLM 合入代码**接受**决策点的详细 WHY。例：`vllm/v1/kv_offload/cpu/gpu_worker.py`
+  里 `is_src_access_order_any = ...` 上方有 6 行 STREAM/ANY 解释，随 PR #39306 合入。
+  → 所以问题**不是注释长**，别为了短而删掉真正的 WHY。
+- vLLM `docs/contributing/editing-agent-instructions.md` 明列反模式：
+  "Copy-paste between guides → keep in one place, link from the other"；
+  "Prefer examples over explanations"；"consolidate into principles"。
+  → 真问题是**跨处复述**和**啰嗦的 agent 腔**。
+
+## 删除/保留标准
+
+- 注释只是把下一行代码翻成英文，或从名字/类型已能看出 → 删。
+- 同一解释出现在多处（inline+docstring，或跨文件） → 只在**定义点/决策点**留一份，
+  其余一句话指回去（`see X above` / `见 #PR`）。
+- WHY 该留就留，但放在它**生效的那一处**，写成平实陈述句，别堆成多段排比的 prose。
+- 值得留的：非显然的意图、权衡、约束、踩过的坑、外部引用（issue/PR 号）。
+
+## 真实案例：跨文件复述（本仓库被挑 "reads agent-flavored"）
+
+`srcAccessOrder` 的 STREAM/ANY 语义在 enum 定义、调用点、`build_params` 三处各写一长段
+→ reviewer 让精简。正确做法：定义点留唯一权威解释，其余指回去。
+
+```python
+# ❌ BAD：build_params 里把语义连同长 URL 又抄一遍
+# srcAccessOrder controls whether the DMA may read the source out of stream
+# order. ANY lets the engine prefetch ... STREAM(1) for stores ... ANY(3) for
+# loads ... Same split as #39306. See https://docs.nvidia.com/...
+attrs = _CUmemcpyAttributes(srcAccessOrder=src_access_order)
+
+# ✅ GOOD：语义只在常量定义处留一份，这里指回去
+# STREAM for stores, ANY for loads; see #39306 and the enum above.
+attrs = _CUmemcpyAttributes(srcAccessOrder=src_access_order)
+```
+
+## 提交前一步
+
+diff 里每条新增注释自问两遍：
+1. 删掉它，代码是否依然清楚？是 → 删。
+2. 这段解释别处是否已有？有 → 删本处，指回去。
+匹配该文件既有的简洁风格，不要引入更啰嗦的风格。

@@ -9,34 +9,41 @@ Find the maximum QPS at which an LLM inference service still meets a p50 end-to-
 
 ## Bootstrap (must run at session start, idempotent)
 
-Before any probe, run the bundled bootstrap so the benchmarking workspace is guaranteed to exist:
+Before any probe, run the bundled bootstrap. It prepares the workspace end-to-end so the agent does not need to ask the user to clone, install deps, or copy the dataset manually:
 
 ```bash
 bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh
 ```
 
-What it does (idempotent — re-running is cheap):
-- Clones `https://github.com/FlowGPT/llm-inference-benchmarking` (`qq-test` branch) into the workdir.
-- Installs `uv` (user-local) if missing, creates `$WORKDIR/.venv`, and `uv pip install -r requirements.txt`.
-- Symlinks the replay dataset from `/mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log` into the workdir.
-- Creates `$WORKDIR/bench-runs/`.
-- **Runs `scripts/health_check.py`** (full GPU/PCIe/AER/pinned-BW preflight, see below) and writes the result to `$WORKDIR/.health_check.json`.
+What it does (idempotent):
 
-Environment overrides (all optional):
-- `LLM_BENCH_DIR` — workdir (default `$HOME/llm-inference-benchmarking`).
-- `LLM_BENCH_REPO_URL`, `LLM_BENCH_REPO_BRANCH` — change repo / branch.
-- `LLM_BENCH_DATASET_SRC` — alternate dataset path (if the shared mount lives elsewhere on this machine).
+1. **Mount gate** — if `/mnt/shared/sss` does not exist, bootstrap **exits immediately** with a message to mount the shared disk first. Do not proceed; tell the user to挂盘.
+2. **Clone or update** `https://github.com/Saddss/llm-inference-benchmarking.git` on branch **`sss-test`** (fetch + checkout + `pull --ff-only` when the repo already exists).
+3. **Python env** — install `uv` if missing; create `$WORKDIR/.venv`; run `uv pip install -r requirements.txt` and `uv pip install requests`.
+4. **Dataset** — **copy** (not symlink) `/mnt/shared/sss/data/replay-logs-conv-avg5k.json` → `$WORKDIR/replay-logs-conv-avg5k.json`. Skip copy if the file already exists and is non-empty.
+5. Create `$WORKDIR/bench-runs/`.
+6. Run `scripts/health_check.py` → `$WORKDIR/.health_check.json`.
 
-**The last line of bootstrap.sh's stdout is `WORKDIR=<absolute path>`. Capture it and export it as `LLM_BENCH_DIR` for the rest of the session.** Example:
+Environment overrides (optional):
+
+| Variable | Default |
+|----------|---------|
+| `LLM_BENCH_DIR` | `$HOME/llm-inference-benchmarking` |
+| `LLM_BENCH_REPO_URL` | `https://github.com/Saddss/llm-inference-benchmarking.git` |
+| `LLM_BENCH_REPO_BRANCH` | `sss-test` |
+| `LLM_BENCH_SHARED_MOUNT` | `/mnt/shared/sss` |
+| `LLM_BENCH_DATASET_SRC` | `/mnt/shared/sss/data/replay-logs-conv-avg5k.json` |
+
+**The last line of bootstrap stdout is `WORKDIR=<absolute path>`.** Capture it:
 
 ```bash
 eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh | tail -1)"
 export LLM_BENCH_DIR="$WORKDIR"
 ```
 
-`bootstrap.sh` always returns exit 0 on a successful setup (even when the health check reports problems); the agent must read `$LLM_BENCH_DIR/.health_check.json` to decide whether to proceed. If bootstrap itself exits non-zero, surface the stderr to the user verbatim and stop — almost always it means the shared dataset mount is missing or git can't reach GitHub.
+Bootstrap returns exit 0 when setup succeeded (even if health check reports warnings). Read `$LLM_BENCH_DIR/.health_check.json` for `exit` semantics. Bootstrap exits non-zero only on hard failures (no mount, no dataset file, git/uv/import errors).
 
-All later commands in this skill assume `$LLM_BENCH_DIR` is set and points at a bootstrapped workdir with a `.venv/`, `online_replay.py`, and a real (or symlinked) `replay-logs-origin.log`.
+All later commands assume `$LLM_BENCH_DIR` has `.venv/`, `online_replay.py` (sss-test with prod sampling defaults), and `replay-logs-conv-avg5k.json`.
 
 ## Pre-flight health check (gates offload runs)
 
@@ -81,7 +88,7 @@ The Python file is portable — invoke it with whichever python has `torch` inst
 6. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
    - **Mode A (generic tuning)**: "review my command and propose better values for what is already there"; or
    - **Mode B (feature enablement)**: "在 X 基础上开启 Y 功能, 你去调优性能" — i.e. the user names a specific feature/knob they want enabled but does not necessarily understand it themselves. Mode B triggers a deep, multi-stage investigation (see "Feature-enablement tuning" below) and is more expensive in wall-clock time, so make sure the user knows that.
-7. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`), input log path (default `$LLM_BENCH_DIR/replay-logs-origin.log`, resolved by bootstrap.sh).
+7. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Input log defaults to `$LLM_BENCH_DIR/replay-logs-conv-avg5k.json` (installed by bootstrap). Do **not** ask the user for repo clone, branch, venv, or dataset path unless bootstrap failed.
 
 If any of the above are missing, ask the user before starting.
 
@@ -182,12 +189,13 @@ Mode B never auto-extends into territory the user did not approve. Whenever you 
 
 ## Working directory and fixed conventions
 
-- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py` (the `--input` is a relative path).
-- Always invoke Python through the workdir's venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`. Do **not** rely on the system `python3` — its dependencies may differ.
-- Sample range is **always** `0.0 (0.02 * target_qps)`, capped at `1.0`. For `target_qps = 5` -> `0.0 0.1`; for `25` -> `0.0 0.5`; for `60` -> `0.0 1.0`.
-- `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or whatever override).
-- Use `--json-output` so we can compute the average of per-round `Latency.p50` precisely.
-- Pin `--max-rounds` to `12` or `24` so each test self-terminates.
+- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py` (relative `--input replay-logs-conv-avg5k.json`).
+- Always invoke Python through the workdir venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`.
+- Sample range is **always** `0.0 (0.02 * target_qps)`, capped at `1.0`. For `target_qps = 5.1` -> `0.0 0.102`; for `25` -> `0.0 0.5`; for `60` -> `0.0 1.0`.
+- `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or override).
+- Production sampling (dataset has no per-request fields): `--max-tokens 200 --temperature 0.7` (plus `top_p` / penalties via CLI or `online_replay` prod defaults when omitted).
+- Use `--json-output` for per-round metrics.
+- Pin `--max-rounds` to `12` or `24`.
 
 ## Service lifecycle
 
@@ -271,16 +279,27 @@ Example shard command (single-process case):
 ```bash
 cd "$LLM_BENCH_DIR" && \
 "$LLM_BENCH_DIR/.venv/bin/python" online_replay.py \
-    --input replay-logs-origin.log \
-    --replay-mode qps --target-qps 5 \
-    --sample-range 0.0 0.1 \
+    --input replay-logs-conv-avg5k.json \
+    --preload-time 2 \
+    --replay-mode qps --target-qps 5.1 \
+    --sample-range 0.0 0.102 \
     --api-base http://localhost:8080/v1 \
+    --api-key "$(printf 'a%.0s' {1..32})" \
     --model your-model-name \
     --use-chat \
+    --max-tokens 200 \
+    --temperature 0.7 \
+    --top-p 0.85 \
+    --top-k 40 \
+    --min-p 0.1 \
+    --frequency-penalty 0.4 \
+    --presence-penalty 0.1 \
     --round-duration 30 \
+    --round-drain-timeout 300 \
+    --request-timeout 600 \
     --max-rounds 12 \
     --e2e-slo 6.5 \
-    --json-output bench-runs/qps_5.0_20260101_120000.jsonl
+    --json-output bench-runs/qps_5.1_20260101_120000.jsonl
 ```
 
 ### Prefix cache hit rate (per-probe, framework-agnostic)

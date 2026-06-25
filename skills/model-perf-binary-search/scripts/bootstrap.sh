@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # Bootstrap the model-perf-binary-search workspace.
-# Idempotent: re-running on an already-set-up machine is a no-op except for the
-# final "WORKDIR=..." line on stdout. Safe to call at every skill invocation.
+# Idempotent: re-running on an already-set-up machine is cheap.
+# Last stdout line: WORKDIR=<absolute path>
 #
-# What it does:
-#   1. Clone or verify the benchmarking repo (default FlowGPT/llm-inference-benchmarking@qq-test).
-#   2. Install uv (user-local) if missing.
-#   3. Create a .venv inside the workdir and install requirements.txt.
-#   4. Symlink the replay log dataset from the shared mount into the workdir.
-#   5. Ensure bench-runs/ exists.
+# Steps:
+#   1. Verify shared disk mount (/mnt/shared/sss).
+#   2. Clone or update Saddss/llm-inference-benchmarking @ sss-test.
+#   3. uv venv + requirements.txt + requests.
+#   4. Copy replay-logs-conv-avg5k.json into the workdir.
+#   5. bench-runs/ + health check.
 #
-# Environment overrides (all optional):
-#   LLM_BENCH_DIR           target workdir         (default: $HOME/llm-inference-benchmarking)
-#   LLM_BENCH_REPO_URL      repo to clone          (default: https://github.com/Saddss/llm-inference-benchmarking)
-#   LLM_BENCH_REPO_BRANCH   branch to check out    (default: sss-test)
-#   LLM_BENCH_DATASET_SRC   replay-log source path (default: /mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log)
-#
-# Last stdout line is the resolved WORKDIR=<absolute path> so the caller can
-# `eval` it or grep it. All progress logs go to stderr.
+# Environment overrides (optional):
+#   LLM_BENCH_DIR              workdir (default: $HOME/llm-inference-benchmarking)
+#   LLM_BENCH_REPO_URL         default: https://github.com/Saddss/llm-inference-benchmarking
+#   LLM_BENCH_REPO_BRANCH      default: sss-test
+#   LLM_BENCH_DATASET_SRC      default: /mnt/shared/sss/data/replay-logs-conv-avg5k.json
+#   LLM_BENCH_SHARED_MOUNT     default: /mnt/shared/sss
 
 set -euo pipefail
 
-REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/Saddss/llm-inference-benchmarking}"
+REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/Saddss/llm-inference-benchmarking.git}"
 REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-sss-test}"
-DATASET_SRC="${LLM_BENCH_DATASET_SRC:-/mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log}"
+SHARED_MOUNT="${LLM_BENCH_SHARED_MOUNT:-/mnt/shared/sss}"
+DATASET_SRC="${LLM_BENCH_DATASET_SRC:-$SHARED_MOUNT/data/replay-logs-conv-avg5k.json}"
+DATASET_NAME="replay-logs-conv-avg5k.json"
 WORKDIR="${LLM_BENCH_DIR:-$HOME/llm-inference-benchmarking}"
 
 log()  { printf '[bootstrap] %s\n' "$*" >&2; }
@@ -31,75 +31,77 @@ fail() { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 
 log "target workdir: $WORKDIR"
 log "source repo:    $REPO_URL ($REPO_BRANCH)"
+log "shared mount:   $SHARED_MOUNT"
 log "dataset source: $DATASET_SRC"
 
-# 1) clone or verify the benchmarking repo
+# 0) shared disk must be mounted before anything else
+if [ ! -d "$SHARED_MOUNT" ]; then
+  fail "共享盘未挂载：$SHARED_MOUNT 不存在。请先挂盘后再运行 bootstrap。"
+fi
+
+# 1) clone or update repo @ sss-test
 if [ ! -d "$WORKDIR/.git" ]; then
   if [ -e "$WORKDIR" ] && [ -n "$(ls -A "$WORKDIR" 2>/dev/null)" ]; then
-    fail "$WORKDIR exists and is non-empty but has no .git; refusing to clone over it. Move it aside or set LLM_BENCH_DIR to a different path."
+    fail "$WORKDIR exists and is non-empty but has no .git; move it aside or set LLM_BENCH_DIR."
   fi
   log "cloning ($REPO_BRANCH)..."
   git clone --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$WORKDIR" >&2
 else
   current_branch="$(git -C "$WORKDIR" branch --show-current 2>/dev/null || echo '?')"
-  log "repo present at $WORKDIR (branch: $current_branch); skipping clone"
+  log "repo present (branch: $current_branch); fetching $REPO_BRANCH"
+  git -C "$WORKDIR" fetch origin "$REPO_BRANCH" >&2 || fail "git fetch failed"
+  git -C "$WORKDIR" checkout "$REPO_BRANCH" >&2 || fail "git checkout $REPO_BRANCH failed"
+  if ! git -C "$WORKDIR" pull --ff-only origin "$REPO_BRANCH" >&2; then
+    log "WARN: git pull --ff-only failed (local commits?); continuing with current HEAD"
+  fi
 fi
 
 for f in online_replay.py requirements.txt; do
-  [ -f "$WORKDIR/$f" ] || fail "$WORKDIR/$f missing - clone failed or wrong branch"
+  [ -f "$WORKDIR/$f" ] || fail "$WORKDIR/$f missing — wrong branch or incomplete clone"
 done
 
-# 2) ensure uv is on PATH
+# 2) uv
 if ! command -v uv >/dev/null 2>&1; then
   if [ -x "$HOME/.local/bin/uv" ]; then
     export PATH="$HOME/.local/bin:$PATH"
   else
     log "uv not found, installing to ~/.local/bin"
-    curl -fsSL https://astral.sh/uv/install.sh | sh >&2 || fail "uv install failed - see https://docs.astral.sh/uv/"
+    curl -fsSL https://astral.sh/uv/install.sh | sh >&2 || fail "uv install failed"
     export PATH="$HOME/.local/bin:$PATH"
-    # persist for future shells
     if [ -f "$HOME/.bashrc" ] && ! grep -q '.local/bin' "$HOME/.bashrc"; then
       echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
     fi
   fi
 fi
-command -v uv >/dev/null 2>&1 || fail "uv still not available after install attempt"
+command -v uv >/dev/null 2>&1 || fail "uv not available"
 log "uv: $(uv --version 2>&1)"
 
-# 3) venv + requirements
+# 3) venv + deps
 cd "$WORKDIR"
 if [ ! -d ".venv" ]; then
-  log "creating .venv via uv venv"
+  log "creating .venv"
   uv venv --quiet >&2
 fi
-log "syncing requirements.txt (uv pip install)"
+log "uv pip install -r requirements.txt"
 uv pip install --quiet -r requirements.txt >&2
+log "uv pip install requests"
+uv pip install --quiet requests >&2
 
-# Patch missing deps that upstream qq-test's requirements.txt forgets but
-# online_replay.py imports directly. Keep this list short; only add a package
-# here after confirming it's missing on a freshly-cloned qq-test branch.
-EXTRA_DEPS=(requests)
-log "installing extra deps not pinned by upstream: ${EXTRA_DEPS[*]}"
-uv pip install --quiet "${EXTRA_DEPS[@]}" >&2
-
-# 4) dataset symlink
-TARGET_DATASET="$WORKDIR/replay-logs-origin.log"
-if [ -e "$TARGET_DATASET" ] || [ -L "$TARGET_DATASET" ]; then
-  if [ -L "$TARGET_DATASET" ]; then
-    log "dataset symlink already in place -> $(readlink -f "$TARGET_DATASET" 2>/dev/null || readlink "$TARGET_DATASET")"
-  else
-    log "dataset file exists (non-symlink), size=$(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes"
-  fi
+# 4) copy dataset (not symlink — portable across machines)
+TARGET_DATASET="$WORKDIR/$DATASET_NAME"
+if [ -f "$TARGET_DATASET" ] && [ -s "$TARGET_DATASET" ]; then
+  log "dataset already present: $TARGET_DATASET ($(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes)"
 else
-  [ -e "$DATASET_SRC" ] || fail "dataset source not found at $DATASET_SRC; mount the shared disk or set LLM_BENCH_DATASET_SRC"
-  log "symlinking dataset -> $TARGET_DATASET"
-  ln -s "$DATASET_SRC" "$TARGET_DATASET"
+  [ -f "$DATASET_SRC" ] || fail "dataset not found at $DATASET_SRC (shared mount OK but file missing)"
+  log "copying dataset -> $TARGET_DATASET (this may take a minute)..."
+  cp -f "$DATASET_SRC" "$TARGET_DATASET"
+  log "dataset copied ($(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes)"
 fi
 
-# 5) bench-runs dir
+# 5) bench-runs
 mkdir -p "$WORKDIR/bench-runs"
 
-# 6) sanity: venv python can import the main module (all deps resolved)
+# 6) import smoke
 smoke_err="$("$WORKDIR/.venv/bin/python" -c "
 import sys
 sys.path.insert(0, '$WORKDIR')
@@ -109,39 +111,23 @@ except Exception as e:
     print(f'{type(e).__name__}: {e}')
 " 2>&1)"
 if [ -n "$smoke_err" ]; then
-  fail "online_replay import smoke check failed: $smoke_err
-       fix the missing dependency, then either edit requirements.txt or add it to EXTRA_DEPS in bootstrap.sh"
+  fail "online_replay import failed: $smoke_err"
 fi
 log "smoke check: online_replay imports OK"
 
-# 7) full health check (GPU + PCIe link + AER + pinned BW + free GPU mem + disk).
-#    Prefer the system python3 because it usually has torch (needed for the
-#    bandwidth measurement); fall back to the venv python.
+# 7) health check
 HEALTH_PY="$(dirname "$0")/health_check.py"
 HEALTH_PYTHON="$WORKDIR/.venv/bin/python"
 if python3 -c "import torch" >/dev/null 2>&1; then
   HEALTH_PYTHON="$(command -v python3)"
 fi
-log "running health check ($HEALTH_PYTHON $HEALTH_PY)"
+log "running health check"
 set +e
 "$HEALTH_PYTHON" "$HEALTH_PY" --workdir "$WORKDIR" >&2
 HEALTH_RC=$?
 set -e
-
-log "health check exit=$HEALTH_RC  (json: $WORKDIR/.health_check.json)"
-if [ "$HEALTH_RC" -eq 2 ]; then
-  log "BLOCKER detected — see the report above. Offload-mode runs should NOT proceed."
-elif [ "$HEALTH_RC" -eq 1 ]; then
-  log "warnings present — non-offload runs are OK, offload metrics may be misleading."
-fi
+log "health check exit=$HEALTH_RC (json: $WORKDIR/.health_check.json)"
 
 log "ready"
-
-# Last line of stdout = the resolved workdir, for callers to capture.
-# The health check's exit code is propagated as the bootstrap's exit code
-# UNLESS we want bootstrap to still succeed for non-offload work. We choose
-# to ALWAYS return 0 from bootstrap proper; the agent reads .health_check.json
-# to decide what to do. This makes bootstrap idempotent across both green and
-# degraded machines without forcing callers to special-case exit codes.
 printf 'WORKDIR=%s\n' "$WORKDIR"
 exit 0

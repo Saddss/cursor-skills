@@ -25,6 +25,7 @@ SHARED_MOUNT="${LLM_BENCH_SHARED_MOUNT:-/mnt/shared/sss}"
 DATASET_SRC="${LLM_BENCH_DATASET_SRC:-$SHARED_MOUNT/data/replay-logs-conv-avg5k.json}"
 DATASET_NAME="replay-logs-conv-avg5k.json"
 WORKDIR="${LLM_BENCH_DIR:-$HOME/llm-inference-benchmarking}"
+TARGET_DATASET="$WORKDIR/$DATASET_NAME"
 
 log()  { printf '[bootstrap] %s\n' "$*" >&2; }
 fail() { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -34,9 +35,11 @@ log "source repo:    $REPO_URL ($REPO_BRANCH)"
 log "shared mount:   $SHARED_MOUNT"
 log "dataset source: $DATASET_SRC"
 
-# 0) shared disk must be mounted before anything else
-if [ ! -d "$SHARED_MOUNT" ]; then
-  fail "共享盘未挂载：$SHARED_MOUNT 不存在。请先挂盘后再运行 bootstrap。"
+# 0) shared disk is only required when the dataset is not already local
+if [ -f "$TARGET_DATASET" ] && [ -s "$TARGET_DATASET" ]; then
+  log "local dataset already present; shared mount is optional"
+elif [ ! -d "$SHARED_MOUNT" ]; then
+  fail "共享盘未挂载：$SHARED_MOUNT 不存在，且本地 dataset 不存在：$TARGET_DATASET。请先挂盘或准备本地 dataset 后再运行 bootstrap。"
 fi
 
 # 1) clone or update repo @ sss-test
@@ -88,7 +91,6 @@ log "uv pip install requests"
 uv pip install --quiet requests >&2
 
 # 4) copy dataset (not symlink — portable across machines)
-TARGET_DATASET="$WORKDIR/$DATASET_NAME"
 if [ -f "$TARGET_DATASET" ] && [ -s "$TARGET_DATASET" ]; then
   log "dataset already present: $TARGET_DATASET ($(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes)"
 else

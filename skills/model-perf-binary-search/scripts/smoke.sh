@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Smoke-test the bundled helper scripts against known fixtures.
 #
-# Run after editing scripts/analyze_rounds.py or scripts/prefix_cache_hit_rate.py
-# to catch obvious regressions before pushing. Cheap (<1s) and self-contained --
-# no network, no live engine, no GPU.
+# Run after editing the bundled helpers to catch obvious regressions before
+# pushing. Self-contained: no network, live engine, or GPU.
 #
 # Exit code: 0 if all checks pass, non-zero with case count otherwise.
 
@@ -83,6 +82,9 @@ check "prefix_cache: no prefix metrics -> NO_PREFIX_METRICS, rc 2" 2 '"status": 
   python3 "$HERE/prefix_cache_hit_rate.py" diff \
     --before "$FIX/no_prefix_before.prom" \
     --after "$FIX/no_prefix_after.prom"
+
+check "dataset: selected-only copy and failure gates" 0 'PASS' \
+  bash "$HERE/test_prepare_dataset.sh"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 exit "$FAIL"

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Bootstrap the model-perf-binary-search workspace.
 # Idempotent: re-running on an already-set-up machine is cheap.
-# Last stdout line: WORKDIR=<absolute path>
+# Stdout: shell-safe WORKDIR=<path> and DATASET=<path> assignments.
 #
 # Steps:
 #   1. Verify shared disk mount (/mnt/shared/sss).
 #   2. Clone or update Saddss/llm-inference-benchmarking @ sss-test.
 #   3. uv venv + requirements.txt + requests.
-#   4. Copy replay-logs-conv-avg5k.json into the workdir.
+#   4. Copy the explicitly selected shared dataset into the workdir.
 #   5. bench-runs/ + health check.
 #
 # Environment overrides (optional):
 #   LLM_BENCH_DIR              workdir (default: $HOME/llm-inference-benchmarking)
 #   LLM_BENCH_REPO_URL         default: https://github.com/Saddss/llm-inference-benchmarking
 #   LLM_BENCH_REPO_BRANCH      default: sss-test
-#   LLM_BENCH_DATASET_SRC      default: /mnt/shared/sss/data/replay-logs-conv-avg5k.json
+#   LLM_BENCH_DATASET_SRC      required: selected file under <mount>/data
 #   LLM_BENCH_SHARED_MOUNT     default: /mnt/shared/sss
 
 set -euo pipefail
@@ -22,10 +22,10 @@ set -euo pipefail
 REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/Saddss/llm-inference-benchmarking.git}"
 REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-sss-test}"
 SHARED_MOUNT="${LLM_BENCH_SHARED_MOUNT:-/mnt/shared/sss}"
-DATASET_SRC="${LLM_BENCH_DATASET_SRC:-$SHARED_MOUNT/data/replay-logs-conv-avg5k.json}"
-DATASET_NAME="replay-logs-conv-avg5k.json"
+SHARED_DATA_DIR="$SHARED_MOUNT/data"
+DATASET_SRC="${LLM_BENCH_DATASET_SRC:-}"
 WORKDIR="${LLM_BENCH_DIR:-$HOME/llm-inference-benchmarking}"
-TARGET_DATASET="$WORKDIR/$DATASET_NAME"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log()  { printf '[bootstrap] %s\n' "$*" >&2; }
 fail() { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -33,14 +33,33 @@ fail() { printf '[bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 log "target workdir: $WORKDIR"
 log "source repo:    $REPO_URL ($REPO_BRANCH)"
 log "shared mount:   $SHARED_MOUNT"
-log "dataset source: $DATASET_SRC"
+log "dataset source: ${DATASET_SRC:-<not selected>}"
 
-# 0) shared disk is only required when the dataset is not already local
-if [ -f "$TARGET_DATASET" ] && [ -s "$TARGET_DATASET" ]; then
-  log "local dataset already present; shared mount is optional"
-elif [ ! -d "$SHARED_MOUNT" ]; then
-  fail "共享盘未挂载：$SHARED_MOUNT 不存在，且本地 dataset 不存在：$TARGET_DATASET。请先挂盘或准备本地 dataset 后再运行 bootstrap。"
+# 0) each session must explicitly select one shared dataset
+[ -d "$SHARED_DATA_DIR" ] || fail "共享数据目录不存在：$SHARED_DATA_DIR。请先挂盘。"
+if ! (
+  shopt -s dotglob nullglob
+  for candidate in "$SHARED_DATA_DIR"/*; do
+    if [ -f "$candidate" ] && [ -s "$candidate" ]; then
+      exit 0
+    fi
+  done
+  exit 1
+); then
+  fail "共享数据目录没有非空数据集：$SHARED_DATA_DIR。"
 fi
+[ -n "$DATASET_SRC" ] || fail "未选择数据集：请先列出 $SHARED_DATA_DIR 并设置 LLM_BENCH_DATASET_SRC。"
+case "$DATASET_SRC" in
+  /*) ;;
+  *) fail "数据集路径必须是绝对路径：$DATASET_SRC" ;;
+esac
+[ -f "$DATASET_SRC" ] && [ -s "$DATASET_SRC" ] || fail "数据集不存在或为空：$DATASET_SRC"
+CANONICAL_SHARED_DATA_DIR="$(realpath "$SHARED_DATA_DIR")"
+CANONICAL_DATASET_SRC="$(realpath "$DATASET_SRC")"
+case "$CANONICAL_DATASET_SRC" in
+  "$CANONICAL_SHARED_DATA_DIR"/*) ;;
+  *) fail "数据集必须位于 $CANONICAL_SHARED_DATA_DIR：$CANONICAL_DATASET_SRC" ;;
+esac
 
 # 1) clone or update repo @ sss-test
 if [ ! -d "$WORKDIR/.git" ]; then
@@ -90,15 +109,10 @@ uv pip install --quiet -r requirements.txt >&2
 log "uv pip install requests"
 uv pip install --quiet requests >&2
 
-# 4) copy dataset (not symlink — portable across machines)
-if [ -f "$TARGET_DATASET" ] && [ -s "$TARGET_DATASET" ]; then
-  log "dataset already present: $TARGET_DATASET ($(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes)"
-else
-  [ -f "$DATASET_SRC" ] || fail "dataset not found at $DATASET_SRC (shared mount OK but file missing)"
-  log "copying dataset -> $TARGET_DATASET (this may take a minute)..."
-  cp -f "$DATASET_SRC" "$TARGET_DATASET"
-  log "dataset copied ($(stat -c %s "$TARGET_DATASET" 2>/dev/null || echo ?) bytes)"
-fi
+# 4) copy only the selected dataset (not symlink — portable across machines)
+DATASET_ASSIGNMENT="$(
+  "$SCRIPT_DIR/prepare_dataset.sh" "$SHARED_DATA_DIR" "$DATASET_SRC" "$WORKDIR"
+)" || fail "selected dataset preparation failed"
 
 # 5) bench-runs
 mkdir -p "$WORKDIR/bench-runs"
@@ -131,5 +145,6 @@ set -e
 log "health check exit=$HEALTH_RC (json: $WORKDIR/.health_check.json)"
 
 log "ready"
-printf 'WORKDIR=%s\n' "$WORKDIR"
+printf 'WORKDIR=%q\n' "$WORKDIR"
+printf '%s\n' "$DATASET_ASSIGNMENT"
 exit 0

@@ -7,20 +7,22 @@ description: Find the maximum sustainable QPS of an LLM inference service that m
 
 Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives the `online_replay.py` script from `Saddss/llm-inference-benchmarking@sss-test` (carries the sampler / timeout / round-drain fixes; the upstream `FlowGPT/qq-test` is missing them and will not work against TRT-LLM or any saturated service) against a service that the user provides a startup command for, and binary-searches the QPS axis.
 
-## Bootstrap (must run at session start, idempotent)
+## Dataset selection and bootstrap (must run at session start)
 
-Before any probe, run the bundled bootstrap. It prepares the workspace end-to-end so the agent does not need to ask the user to clone, install deps, or copy the dataset manually:
+Before every benchmark session, list the regular files under `/mnt/shared/sss/data` and ask the user to choose exactly one dataset. Never reuse the previous session's choice, infer a choice from filenames, or copy every dataset. After the user chooses:
 
 ```bash
-bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh
+export LLM_BENCH_DATASET_SRC="/mnt/shared/sss/data/<chosen-file>"
+eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh)"
+export LLM_BENCH_DIR="$WORKDIR"
 ```
 
 What it does (idempotent):
 
-1. **Mount gate** — if `/mnt/shared/sss` does not exist, bootstrap **exits immediately** with a message to mount the shared disk first. Do not proceed; tell the user to挂盘.
+1. **Selection gate** — require one explicit `LLM_BENCH_DATASET_SRC` under `/mnt/shared/sss/data`. Missing mount, missing selection, empty files, and paths outside that directory fail immediately.
 2. **Clone or update** `https://github.com/Saddss/llm-inference-benchmarking.git` on branch **`sss-test`** (fetch + checkout + `pull --ff-only` when the repo already exists).
 3. **Python env** — install `uv` if missing; create `$WORKDIR/.venv`; run `uv pip install -r requirements.txt` and `uv pip install requests`.
-4. **Dataset** — **copy** (not symlink) `/mnt/shared/sss/data/replay-logs-conv-avg5k.json` → `$WORKDIR/replay-logs-conv-avg5k.json`. Skip copy if the file already exists and is non-empty.
+4. **Dataset** — copy only the selected file to `$WORKDIR/datasets/<basename>`. Reuse a non-empty local file with that basename; never bulk-copy the shared directory.
 5. Create `$WORKDIR/bench-runs/`.
 6. Run `scripts/health_check.py` → `$WORKDIR/.health_check.json`.
 
@@ -32,18 +34,13 @@ Environment overrides (optional):
 | `LLM_BENCH_REPO_URL` | `https://github.com/Saddss/llm-inference-benchmarking.git` |
 | `LLM_BENCH_REPO_BRANCH` | `sss-test` |
 | `LLM_BENCH_SHARED_MOUNT` | `/mnt/shared/sss` |
-| `LLM_BENCH_DATASET_SRC` | `/mnt/shared/sss/data/replay-logs-conv-avg5k.json` |
+| `LLM_BENCH_DATASET_SRC` | Required selected file under `<mount>/data` |
 
-**The last line of bootstrap stdout is `WORKDIR=<absolute path>`.** Capture it:
-
-```bash
-eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh | tail -1)"
-export LLM_BENCH_DIR="$WORKDIR"
-```
+Bootstrap stdout contains shell-safe `WORKDIR=<absolute path>` and `DATASET=<local selected path>` assignments. Capture both with the command above.
 
 Bootstrap returns exit 0 when setup succeeded (even if health check reports warnings). Read `$LLM_BENCH_DIR/.health_check.json` for `exit` semantics. Bootstrap exits non-zero only on hard failures (no mount, no dataset file, git/uv/import errors).
 
-All later commands assume `$LLM_BENCH_DIR` has `.venv/`, `online_replay.py` (sss-test with prod sampling defaults), and `replay-logs-conv-avg5k.json`.
+All later commands assume `$LLM_BENCH_DIR` has `.venv/` and `online_replay.py`, and use `$DATASET` as the replay input.
 
 ## Pre-flight health check (gates offload runs)
 
@@ -78,21 +75,22 @@ The Python file is portable — invoke it with whichever python has `torch` inst
 
 ## Required inputs (ask the user up-front, in one message)
 
-1. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
-2. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
-3. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
+1. **Replay dataset** — list `/mnt/shared/sss/data` and ask the user to choose one, even when only one file exists.
+2. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
+3. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
+4. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
    - `offload = OFF` -> run **12 rounds**, average **last 6** rounds' p50.
    - `offload = ON`  -> run **24 rounds**, average **last 12** rounds' p50.
-4. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
-5. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
-6. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
+5. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
+6. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
+7. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
    - **Mode A (generic tuning)**: "review my command and propose better values for what is already there"; or
    - **Mode B (feature enablement)**: "在 X 基础上开启 Y 功能, 你去调优性能" — i.e. the user names a specific feature/knob they want enabled but does not necessarily understand it themselves. Mode B triggers a deep, multi-stage investigation (see "Feature-enablement tuning" below) and is more expensive in wall-clock time, so make sure the user knows that.
-7. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Input log defaults to `$LLM_BENCH_DIR/replay-logs-conv-avg5k.json` (installed by bootstrap). Do **not** ask the user for repo clone, branch, venv, or dataset path unless bootstrap failed.
+8. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Do **not** ask the user for repo clone, branch, venv, or a path outside the shared-dataset choice unless bootstrap failed.
 
 If any of the above are missing, ask the user before starting.
 
-## Parameter-tuning round (only if the user opted in at input #6)
+## Parameter-tuning round (only if the user opted in at input #7)
 
 The goal: produce one or more **extra** complete binary-search sessions with tuned startup commands, so the user can compare baseline vs tuned max QPS. Order of operations: baseline run with the user's original command first, then propose tuning, then run the additional binary search(es). Steps 1–7 below cover **Mode A**; for **Mode B** layer the "Feature-enablement tuning" section on top of them.
 
@@ -189,13 +187,19 @@ Mode B never auto-extends into territory the user did not approve. Whenever you 
 
 ## Working directory and fixed conventions
 
-- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py` (relative `--input replay-logs-conv-avg5k.json`).
+- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py`; pass `--input "$DATASET"`.
 - Always invoke Python through the workdir venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`.
 - Sample range is **always** `0.0 (0.02 * target_qps)`, capped at `1.0`. For `target_qps = 5.1` -> `0.0 0.102`; for `25` -> `0.0 0.5`; for `60` -> `0.0 1.0`.
 - `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or override).
 - Production sampling (dataset has no per-request fields): `--max-tokens 200 --temperature 0.7` (plus `top_p` / penalties via CLI or `online_replay` prod defaults when omitted).
 - Use `--json-output` for per-round metrics.
 - Pin `--max-rounds` to `12` or `24`.
+
+### Truncation-aware datasets and MTP
+
+- `online_replay.py` always sends `X-Flow-Conversation-Id`; no extra flag is needed.
+- A dataset's `body.enable_kv_evict` is ignored by default. Add `--forward-kv-evict` only when the user explicitly requests truncation-eviction testing.
+- For MTP runs add `--disable-min-p` and do not pass `--min-p`; the MTP endpoint rejects it. Other runs, including non-MTP speculative decoding, retain production `min_p=0.1`.
 
 ## Service lifecycle
 
@@ -279,7 +283,7 @@ Example shard command (single-process case):
 ```bash
 cd "$LLM_BENCH_DIR" && \
 "$LLM_BENCH_DIR/.venv/bin/python" online_replay.py \
-    --input replay-logs-conv-avg5k.json \
+    --input "$DATASET" \
     --preload-time 2 \
     --replay-mode qps --target-qps 5.1 \
     --sample-range 0.0 0.102 \
@@ -439,4 +443,5 @@ Confirm these from the startup logs: the engine prints `[gpu_worker.py:NNN] Allo
 
 - `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), and emits PASS/FAIL/NOT_ENOUGH_ROUNDS via exit code. Two metrics are always computed: (a) the legacy tail-N average, (b) an auto-detected steady-window average (backward walk with `±0.30` of running median, minimum 3 rounds). When invoked with `--auto-steady` (recommended default in the probe procedure), the steady metric becomes the primary PASS/FAIL signal with tail-N as fallback. Without the flag, behavior is byte-identical to the v1 tail-only algorithm. Also emits a `warmup_dominated` boolean and human-readable `notes[]` for downstream reporting. Read its top docstring for full details.
 - `scripts/prefix_cache_hit_rate.py` snapshots a Prometheus `/metrics` endpoint and computes prefix-cache hit rate between two snapshots. Two subcommands: `snapshot --url … --out …` and `diff --before … --after …`. Framework-agnostic: discovers prefix-cache metric names by heuristic (any name containing "prefix" + hit-like / query-like keywords; falls back to hits+misses pair). Exit codes: `0` OK, `2` NO_PREFIX_METRICS (no prefix metrics on endpoint — caller should fall back to log scraping or engine docs), `3` error. Read its top docstring for full details.
-- `scripts/smoke.sh` runs `analyze_rounds.py` and `prefix_cache_hit_rate.py` against bundled `scripts/fixtures/` files and checks both exit code and a key substring in the JSON output (PASS/FAIL/NOT_ENOUGH_ROUNDS, prefix-cache hit_rate, NO_PREFIX_METRICS). Use this after editing either helper to catch obvious regressions — cheap, no network, no GPU. Exits non-zero with a count if any check fails.
+- `scripts/prepare_dataset.sh` validates one explicitly selected shared dataset and atomically stages only that file under `$WORKDIR/datasets/`. It rejects missing, empty, out-of-directory, relative, and unsafe local targets.
+- `scripts/smoke.sh` validates round analysis, prefix-cache metrics, and selected-dataset staging (including failure and symlink boundaries). Run it after editing any bundled helper; it needs no network, live engine, or GPU.

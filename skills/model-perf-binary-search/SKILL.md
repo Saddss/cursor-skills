@@ -345,12 +345,14 @@ Always include the chosen `hit_metric` / `denom_metric` names in the final repor
 
 Notation: `LOW`, `HIGH` are floats. `precision = 0.1` by default. `best_pass = None`.
 
-1. **Probe HIGH first.**
+**Always probe LOW before HIGH.** Starting at a too-high QPS (especially with CPU KV offload or a cold engine) commonly creates irreversible queue backlog / ReadTimeout storms that waste the whole probe window and contaminate the service for later steps. Establish a passing floor first, then climb.
+
+1. **Probe LOW first.**
+   - If `LOW` FAILs, **extrapolate downward** symmetrically (halve the gap toward 0) until you find a passing QPS or you reach the precision floor. If even a very low QPS fails, report the failure to the user with the per-round p50 values — the service likely has a problem unrelated to capacity; do **not** proceed to HIGH.
+   - If `LOW` PASSes, set `best_pass = LOW` and continue.
+2. **Probe HIGH.**
    - If `HIGH` PASSes, `best_pass = HIGH`, then **extrapolate upward** (see below) and repeat until the new HIGH FAILs. The user explicitly does not want you to stop at the user-provided HIGH if it still passes.
-   - If `HIGH` FAILs, keep `HIGH` and continue.
-2. **Probe LOW.**
-   - If `LOW` FAILs, **extrapolate downward** symmetrically (halve the gap toward 0) until you find a passing QPS or you reach the precision floor. If even a very low QPS fails, report the failure to the user with the per-round p50 values - the service likely has a problem unrelated to capacity.
-   - If `LOW` PASSes, set `best_pass = max(best_pass, LOW)`.
+   - If `HIGH` FAILs, keep `HIGH` as the failing upper bound and continue.
 3. **Standard binary search between the latest passing low and failing high.**
    - Loop while `HIGH - LOW > precision`:
      - `mid = round((LOW + HIGH) / 2, 1)` (always step on a 0.1 grid).
@@ -367,7 +369,7 @@ You decide the next upper bound based on the SLO margin at the current HIGH. Use
   - `slack >= 0.40` (very comfortable, e.g. p ~3.5s vs 6.5s) -> aggressive jump: `new_high = round(H * 1.6, 1)` (cap at `H + 8`).
   - `0.20 <= slack < 0.40` -> moderate: `new_high = round(H * 1.3, 1)`.
   - `0.05 <= slack < 0.20` -> small: `new_high = round(H + max(1.0, 0.15 * H), 1)`.
-  - `slack < 0.05` -> the next probe would likely fail; stop extrapolating, keep `H` as the new search HIGH and proceed to step 2 with `LOW` unchanged.
+  - `slack < 0.05` -> the next probe would likely fail; stop extrapolating, keep `H` as the confirmed PASS / search low, and treat the next untested point above as the failing candidate only after an actual FAIL probe (or enter binary search once a FAIL bound exists).
 
 Always set `new_low = H` (the previous HIGH became a confirmed PASS, so the search interval starts there). Then re-probe `new_high`; if it also passes, recompute and extrapolate again.
 
@@ -379,7 +381,10 @@ Mirror logic: let `p` be the avg-p50 at current LOW `L`. Pick `new_low = round(L
 
 - "Meets SLO" means the **average of per-round p50 e2e latencies** over the tail window is **strictly less than** the SLO (default `6.5s`). A round whose own p50 is over SLO does **not** by itself fail the QPS - only the tail-window average matters.
 - Precision `0.1` means the final answer is reported to one decimal place. If the user says "精确到 0.5" or "整数即可", use that as the precision instead.
-- All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** when monotonically rising per-round p50 (e.g. every round 1.3× or more than the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup), the probe is producing only growing-queue artifacts and not useful steady-state numbers. In that case `pkill -f online_replay.py`, write a row with `Result=FAIL`, `Notes="queue runaway, killed at round X / Y, last p50 = Zs"`, set `hit_rate=n/a`, and proceed with the bisect. Document the exception in the final report so the user knows which probes were early-stopped.
+- All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** kill the probe early (`pkill -f online_replay.py`), write `Result=FAIL`, `hit_rate=n/a`, and proceed with the bisect when **either**:
+  1. per-round p50 is monotonically rising (e.g. every round ≥1.3× the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup); or
+  2. the client is in a ReadTimeout / drain-timeout storm — e.g. ≥2 consecutive rounds that report zero successful requests after drain timeout, or ≥50 ReadTimeouts in the shard stderr while fewer than 3 metric rounds have been written — which typically follows starting too high (another reason LOW is probed first).
+  Document the exception in the final report so the user knows which probes were early-stopped.
 
 ### Warmup-bias caveat (handled by `--auto-steady`; still disclose in report)
 

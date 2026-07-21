@@ -55,10 +55,12 @@ def get_gpu_info():
              "--format=csv,noheader"])
     if not r or r.returncode != 0:
         return None
-    parts = [x.strip() for x in r.stdout.strip().split(",")]
+    # Multi-GPU hosts print one CSV row per device; take the first only.
+    first_line = next((ln for ln in r.stdout.splitlines() if ln.strip()), "")
+    parts = [x.strip() for x in first_line.split(",")]
     if len(parts) < 8:
         return None
-    name, mem_tot, mem_free, drv, cur_g, max_g, cur_w, max_w = parts
+    name, mem_tot, mem_free, drv, cur_g, max_g, cur_w, max_w = parts[:8]
     return {
         "name": name,
         "memory_total_mib": int(mem_tot.split()[0]),

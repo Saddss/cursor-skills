@@ -1,6 +1,6 @@
 ---
 name: model-perf-binary-search
-description: Find the maximum sustainable QPS of an LLM inference service that meets a p50 e2e latency SLO using online_replay.py and a binary search. Use when the user asks to "测最大 QPS"/"二分测性能"/"find max QPS"/"benchmark a model"/"perf test with SLO"/"调参测性能"/"在 X 基础上开启 Y 功能调优" against a local OpenAI-compatible server (e.g. vLLM, SGLang, TRT-LLM) and provides a startup command plus a QPS lower/upper bound. The skill is framework-agnostic, drives the user-supplied serving command, runs replay rounds (12 if no offload / 24 with offload), averages the per-round p50 over the last 6/12 rounds, compares against 6.5s by default, binary-searches QPS to 0.1 precision (extrapolating the upper bound when it still passes), reports progress every 15min (no offload) / 30min (offload), captures prefix-cache hit rate per probe in a framework-agnostic way (scrapes Prometheus /metrics and falls back to engine-specific log scraping or research when the standard endpoint does not expose prefix metrics), and optionally runs additional tuned-parameter sessions in two modes: Mode A (research every existing flag in the user's startup command against the official docs and the local GPU and propose better values), or Mode B (the user names a feature to enable but does not understand it; do a deep multi-stage investigation of that feature, tune the feature's own knobs, and co-adjust user-provided flags whose interactions are documented).
+description: Find the maximum sustainable QPS of an LLM inference service that meets a p50 e2e latency SLO using online_replay.py and a binary search. Use when the user asks to "测最大 QPS"/"二分测性能"/"find max QPS"/"benchmark a model"/"perf test with SLO"/"调参测性能"/"在 X 基础上开启 Y 功能调优" against a local OpenAI-compatible server (e.g. vLLM, SGLang, TRT-LLM) and provides a startup command plus a QPS lower/upper bound. The skill is framework-agnostic, drives the user-supplied serving command, runs replay rounds (8 if no offload / 16 with offload), averages the per-round p50 over the last 4/8 rounds, compares against 6.5s by default, binary-searches QPS to 0.1 precision (extrapolating the upper bound when it still passes), reports progress every 15min (no offload) / 30min (offload), captures prefix-cache hit rate per probe in a framework-agnostic way (scrapes Prometheus /metrics and falls back to engine-specific log scraping or research when the standard endpoint does not expose prefix metrics), and optionally runs additional tuned-parameter sessions in two modes: Mode A (research every existing flag in the user's startup command against the official docs and the local GPU and propose better values), or Mode B (the user names a feature to enable but does not understand it; do a deep multi-stage investigation of that feature, tune the feature's own knobs, and co-adjust user-provided flags whose interactions are documented).
 ---
 
 # Model Performance Binary Search
@@ -79,8 +79,8 @@ The Python file is portable — invoke it with whichever python has `torch` inst
 2. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
 3. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
 4. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
-   - `offload = OFF` -> run **12 rounds**, average **last 6** rounds' p50.
-   - `offload = ON`  -> run **24 rounds**, average **last 12** rounds' p50.
+   - `offload = OFF` -> run **8 rounds**, average **last 4** rounds' p50.
+   - `offload = ON`  -> run **16 rounds**, average **last 8** rounds' p50.
 5. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
 6. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
 7. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
@@ -193,7 +193,7 @@ Mode B never auto-extends into territory the user did not approve. Whenever you 
 - `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or override).
 - Production sampling (dataset has no per-request fields): `--max-tokens 200 --temperature 0.7` (plus `top_p` / penalties via CLI or `online_replay` prod defaults when omitted).
 - Use `--json-output` for per-round metrics.
-- Pin `--max-rounds` to `12` or `24`.
+- Pin `--max-rounds` to `8` or `16`.
 
 ### Truncation-aware datasets and MTP
 
@@ -240,7 +240,7 @@ Implementation:
   - elapsed wall-clock time since session start, plus elapsed since last update;
   - probes completed so far (count + the same per-step table from the "Reporting to the user" section, truncated to last 5 rows if long);
   - the current binary-search bracket `[LOW, HIGH]` and `best_pass`;
-  - what is happening **right now** (e.g. "probe 7 at qps=9.4: round 8/12, last per-round p50 = 5.91s") - read it from the most recently appended line of the active shard's `--json-output` file;
+  - what is happening **right now** (e.g. "probe 7 at qps=9.4: round 6/8, last per-round p50 = 5.91s") - read it from the most recently appended line of the active shard's `--json-output` file;
   - rough ETA for the current probe (`(total_rounds - rounds_seen) * 30s`) and a coarse ETA for the whole session if the bracket width and average per-probe wall time make it estimable;
   - one line confirming the service PID is still alive (`kill -0 {pid}` works) and the latest few stderr lines if anything looks off.
 
@@ -251,26 +251,26 @@ Do **not** wait for an update window to also surface real failures (server crash
 Each binary-search step is one probe at a candidate QPS `q` (always rounded to the nearest 0.1). Procedure:
 
 1. Compute `sample_end = min(0.02 * q, 1.0)`.
-2. Pick `total_rounds` and `tail_window` from the offload flag (12/6 or 24/12).
+2. Pick `total_rounds` and `tail_window` from the offload flag (8/4 or 16/8).
 3. Choose output paths: `bench-runs/qps_{q}_{timestamp}.jsonl` for client metrics, plus `bench-runs/qps_{q}_{timestamp}.{before,after}.prom` for prefix-cache snapshots.
 4. **Snapshot the engine's `/metrics` endpoint** before any traffic is sent (see "Prefix cache hit rate" below). If that step returns `NO_PREFIX_METRICS` or the endpoint is unreachable, follow the fallback flow described there.
 5. Run **one** `online_replay.py` process for `q <= 10`. For `q > 10`, shard the load across `n = ceil(q / 10)` parallel processes, each with `--target-qps {q/n}` and a `--sample-range` chunk of width `sample_end / n` (so the union covers `[0, sample_end)`). Each shard writes to its own json file.
-6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 12/24 rounds.
+6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 8/16 rounds.
 7. **Snapshot `/metrics` again** immediately after the last shard exits, then run the prefix-cache diff helper. Cache the resulting `hit_rate` for the per-probe report.
 8. Decide PASS/FAIL with the bundled helper. **Always pass `--auto-steady`** unless the user explicitly asks for the legacy tail-only behavior:
 
 ```bash
 python3 ~/.cursor/skills/model-perf-binary-search/scripts/analyze_rounds.py \
     --json bench-runs/qps_{q}_{ts}_shard*.jsonl \
-    --total-rounds {12 or 24} \
-    --tail-window {6 or 12} \
+    --total-rounds {8 or 16} \
+    --tail-window {4 or 8} \
     --slo {SLO} \
     --auto-steady
 ```
 
 The helper prints a single JSON line and exits `0=PASS / 1=FAIL / 2=NOT_ENOUGH_ROUNDS`.
 
-**How `--auto-steady` decides PASS/FAIL.** The fixed tail window is sensitive to cold-start backlog: on real chat workloads the first 5-7 rounds at any QPS show large p50 (queue drains slowly), and a fixed `tail-6` slice often still contains 1-2 of those backlog rounds, dragging the average above SLO when the engine has actually reached a steady-state below SLO. The auto-steady algorithm walks backward from the last round, including a round in the steady window if its p50 is within `±0.30` of the running median; it stops at the first round that's too far off. If the resulting window has at least 3 rounds, its average becomes the **primary** PASS/FAIL signal. If not (engine never reached steady state, or noisy variance), it falls back to the tail-window average and emits a note. Tunable knobs: `--steady-tolerance 0.30` (default), `--steady-min-window 3` (default).
+**How `--auto-steady` decides PASS/FAIL.** The fixed tail window is sensitive to cold-start backlog: on real chat workloads the first 5-7 rounds at any QPS can show large p50 while the queue drains, so an 8-round run with a fixed `tail-4` may still include warmup rounds. The auto-steady algorithm walks backward from the last round, including a round in the steady window if its p50 is within `±0.30` of the running median; it stops at the first round that's too far off. If the resulting window has at least 3 rounds, its average becomes the **primary** PASS/FAIL signal. If not (engine never reached steady state, or noisy variance), it falls back to the tail-window average and emits a note. Tunable knobs: `--steady-tolerance 0.30` (default), `--steady-min-window 3` (default).
 
 The helper also always emits a `warmup_dominated` boolean (true when `tail-N / tail-3 > 1.5` or `tail-N / last_round > 2.0`) so the agent can call out runs where the legacy tail metric would have been misleading.
 
@@ -301,7 +301,7 @@ cd "$LLM_BENCH_DIR" && \
     --round-duration 30 \
     --round-drain-timeout 300 \
     --request-timeout 600 \
-    --max-rounds 12 \
+    --max-rounds 8 \
     --e2e-slo 6.5 \
     --json-output bench-runs/qps_5.1_20260101_120000.jsonl
 ```
@@ -388,9 +388,9 @@ Mirror logic: let `p` be the avg-p50 at current LOW `L`. Pick `new_low = round(L
 
 ### Warmup-bias caveat (handled by `--auto-steady`; still disclose in report)
 
-The fixed tail-N window is sensitive to **cold-start backlog**: under realistic chat replay, round 1 typically produces 50–100s p50 (initial burst of in-flight requests draining through the engine's queues), and it takes ~5–7 rounds for the queue to fully reach steady state. With `tail-6` of 12, the first 1–2 tail rounds are often still draining warmup and pull the average above the engine's steady-state p50.
+The fixed tail-N window is sensitive to **cold-start backlog**: under realistic chat replay, round 1 can produce 50–100s p50 and it can take ~5–7 rounds for the queue to reach steady state. With the 8-round no-offload policy, `tail-4` can therefore still contain warmup. The auto-steady result and `warmup_dominated` flag must remain visible in the report.
 
-Concrete pattern from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 15, 38, 16, 4.4, 4.8, 5.2, 5.1, 4.9]`. tail-6 = 6.71s → FAIL. But rounds 8–12 are clearly steady at ~4.9s. The legacy tail-only judgement reports a max QPS that **underestimates true sustainable QPS by ~10–20%**.
+Historical 12-round example from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 15, 38, 16, 4.4, 4.8, 5.2, 5.1, 4.9]`. tail-6 = 6.71s → FAIL. But rounds 8–12 are clearly steady at ~4.9s. The legacy tail-only judgement reports a max QPS that **underestimates true sustainable QPS by ~10–20%**.
 
 **`--auto-steady` (recommended default) automatically detects and uses the steady window.** It identified the [4.4, 4.8, 5.2, 5.1, 4.9] tail above as a 5-round steady window at 4.89s, flipping the verdict to PASS — matching the engine's actual sustained capacity.
 
@@ -398,7 +398,7 @@ Concrete pattern from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 
 
 - Show both the primary metric (steady avg, when detected) and the legacy tail-N avg in the per-probe table.
 - If `warmup_dominated == true` in the analyzer JSON, paste the helper's `notes[]` string verbatim in the final report. It signals the legacy tail metric would have been misleading.
-- If a bisect step PASSes via steady but `warmup_dominated == true`, optionally suggest the user re-run that QPS with `--round-duration 60` or `--max-rounds 24` to confirm. Do **not** silently change those values — they are part of the published methodology.
+- If a bisect step PASSes via steady but `warmup_dominated == true`, optionally suggest the user re-run that QPS with `--round-duration 60` or `--max-rounds 16` to confirm. Do **not** silently change those values — they are part of the published methodology.
 
 **When `--auto-steady` falls back to tail-N** (no ≥3-round window within ±30% of running median): the engine genuinely never reached steady state at this QPS. Report the tail-N number and the `notes` line saying "no steady window detected"; this is a legitimate FAIL signal (or, if `tail-N` itself is far above SLO, a clear overload signal).
 
@@ -410,9 +410,9 @@ Track every probe and present the result clearly when done. Use a markdown table
 |------|-----|--------|----------------------|------------|------------------|-------|
 | 1 | 6.0 | PASS | 4.81s (steady-5) | 5.20s | 31.2% | extrapolating up |
 | 2 | 9.0 | PASS | 5.92s (steady-4) | 6.41s | 28.7% | warmup-dominated; extrapolating |
-| 3 | 12.0 | FAIL | 7.40s (tail-6, no steady) | 7.40s | 24.1% | engine never reached steady |
+| 3 | 12.0 | FAIL | 7.40s (tail-4, no steady) | 7.40s | 24.1% | engine never reached steady |
 | 4 | 10.0 | PASS | 6.11s (steady-5) | 6.30s | 27.4% | |
-| 5 | 11.0 | FAIL | 6.84s (steady-3) | 7.10s | 25.8% | thin steady evidence; suggest re-run with --max-rounds 24 |
+| 5 | 11.0 | FAIL | 6.84s (steady-3) | 7.10s | 25.8% | thin steady evidence; suggest re-run with --max-rounds 16 |
 | ... | ... | ... | ... | ... | ... | converged |
 
 - **Primary p50** is the official PASS/FAIL signal (output of `--auto-steady`). It's either the auto-detected steady-window average (preferred) or the tail-N average (fallback). Always show which window was used in parentheses: `(steady-N)` or `(tail-N, no steady)`.
@@ -420,7 +420,7 @@ Track every probe and present the result clearly when done. Use a markdown table
 - When `warmup_dominated == true` in the analyzer JSON, paste its `notes[]` string in the per-probe `Notes` cell so the user sees why the two columns may diverge.
 - Render `Prefix cache hit` as a percentage with one decimal. If the value is missing for a probe (e.g. `/metrics` unreachable, `NO_PREFIX_METRICS`, or fallback failed), show `n/a` and add a one-line footer explaining why.
 
-Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={12 or 24}, tail={6 or 12})`.
+Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={8 or 16}, tail={4 or 8})`.
 
 Also print, in the final report:
 

@@ -444,6 +444,32 @@ When the user asks for CPU KV offload (vLLM's `--kv-offloading-size N --kv-offlo
 
 Confirm these from the startup logs: the engine prints `[gpu_worker.py:NNN] Allocating M CPU tensors...` lines while pinning. Watch `free -h available` drop by `offload_size / M` per line. If it stalls or the container exits, this is the cause.
 
+## Automation robustness (multi-hour unattended sweeps)
+
+When you script a long unattended sweep (many configs × binary search, hours of wall-clock, no human watching), the binary search itself is the easy part — the orchestration around it is where nights get wasted. These are hard-won rules; each one comes from a real overnight failure that silently burned hours or produced fake data. The overarching principle: **a probe/deployment failure must degrade to a correct verdict, never to fake data or a silent hang.**
+
+1. **Never judge liveness with a single short-timeout health poll.** A saturated-but-alive server is slow to answer `/v1/models` (or `/health`); a 5 s `curl` then times out and you wrongly conclude "server died mid-probe." Retry with a generous timeout (e.g. 20 s × 3) before declaring death, or check the container/process is still up (`docker ps`) as the primary signal. This false-DEAD bites hardest on single-worker tests where one server bears the full load; multi-worker/router setups mask it. If a probe reports a death, confirm the server is actually gone (`docker ps`, direct `curl` with long timeout) before trusting it.
+
+2. **Distinguish "deployment is dead" from "this QPS is too high."** A server that OOM-dies *under load* (GPU VRAM exhausted at high QPS — exit code 137) means *that QPS is too high*, i.e. a **FAIL to bisect below**, not a dead test. If your bisect treats every death as a fatal DIED, retrying the same config just OOMs again and you lose the test. Instead: if the server died mid-probe **and lower QPS have passed**, relaunch it and treat this probe as FAIL (search downward). Only a death **before any PASS** (won't even start) is a true DIED.
+
+3. **`pgrep -f <name>` matches your own observers.** A guard like `while pgrep -f run_x.sh; do sleep; done` will match your monitor scripts, editor, and even the grep — and never exit, hanging the whole run forever. Match container/PID precisely (`ps -eo comm`, exact PID, `docker ps --filter name=^x$`), never `pgrep -f` on a substring that your own tooling also contains.
+
+4. **Globals set inside `$(...)` are lost.** `name=$(launch_and_set_globals)` runs in a subshell; any `LAUNCH_OK=1` it sets is invisible to the caller, so every launch looks failed. Call such functions directly and read globals, or return status via exit code / stdout only.
+
+5. **`n=$(grep -c ... || echo 0)` can hold a newline** ("0\n0"), which then breaks `[ "$n" -ge 10 ]` with `integer expression expected`. Sanitize numeric captures: `n=$(echo "$n" | tr -dc '0-9'); n=${n:-0}`.
+
+6. **Per-test timeout must fit the SLOWEST test, not the median.** Offload runs (2.5 s/GB pinning) with more rounds and upward-extrapolating bounds can take 3-4× a plain run. A cap tuned to the fast case kills the slow ones as false timeouts right when they were converging. Size the hard cap to the worst case (offload + max rounds + full extrapolation), and on timeout recover the partial answer from the probe log (the last PASS/FAIL bracket usually pins it) rather than discarding.
+
+7. **Set the bisect upper bound from the actual deployment, not a habit.** A fixed cap (e.g. 2.0) that's fine for one card is far below a router fronting N cards (ceiling ~N × single-card). Every test then reports "≥2.0" and the sweep is worthless. Always extrapolate the upper bound upward while it still PASSes, with a sane ceiling.
+
+8. **Reuse deployments across tests that share a launch config.** If 3 tests differ only in router policy or a client flag (not the vLLM launch args), start the workers once and run all 3 — don't `stop_all + relaunch` (full recompile) per test. Launch workers in parallel (fire all, then wait-all-ready) so wall time ≈ one compile, not N.
+
+9. **Make the sweep resumable and non-destructive.** Append results to a file; on (re)start, **skip any test that already has a non-DIED result** rather than truncating and re-running everything. A mid-sweep fix or card-count change then costs only the unfinished tests, not the night.
+
+10. **On a shared machine, scan for free resources at launch and never touch others'.** Compute the usable GPU set at runtime (VRAM < threshold, excluding known-bad indices), pin only those, and only ever `docker rm` your own named containers. A co-tenant's job can appear or vanish mid-sweep; a static card list or a blanket `docker rm` will collide.
+
+11. **Verify a `RESULT`/completion signal against the file of record before trusting it.** A monitor tailing a log can read a mid-probe line or a stale value and report a completion that didn't happen. Confirm from the authoritative results file (line count / grep) before acting on "done."
+
 ## Helper scripts
 
 - `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), and emits PASS/FAIL/NOT_ENOUGH_ROUNDS via exit code. Two metrics are always computed: (a) the legacy tail-N average, (b) an auto-detected steady-window average (backward walk with `±0.30` of running median, minimum 3 rounds). When invoked with `--auto-steady` (recommended default in the probe procedure), the steady metric becomes the primary PASS/FAIL signal with tail-N as fallback. Without the flag, behavior is byte-identical to the v1 tail-only algorithm. Also emits a `warmup_dominated` boolean and human-readable `notes[]` for downstream reporting. Read its top docstring for full details.

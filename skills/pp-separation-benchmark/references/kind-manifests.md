@@ -90,3 +90,30 @@ docker-tier absolute QPS.
 
 `kind delete cluster --name pp-split` removes everything K8s (one node container)
 without touching host docker, neighbor containers, or denylisted GPUs.
+
+## Verified 5-GPU results (kind, real vLLM, RTX 5090)
+
+End-to-end run on kind with GPU passthrough (device-plugin restricted to a 5-GPU
+allowlist 0,1,3,4,6; neighbors on 5/7 and denylisted GPU2 untouched throughout).
+Kaon-V3, p50 E2E SLO < 6.5s, 30s rounds, steady-state = mean p50 over post-warmup
+rounds (round0 is cold-start and discarded, matching the tail-window protocol).
+
+| topology | QPS | steady p50 e2e | success | vs docker 5-GPU baseline |
+|---|---|---|---|---|
+| B0 (unified cache-aware, 5 workers + sglang cache_aware router) | 20.8 | ~4.0s | 100% | docker was 6.46s @20.8 — kind is more comfortable |
+| 2h3c (2 hot w/ KV offload + 3 cold, ingress canary-by-header split) | 21.1 | ~4.48s | 100% | docker S1 was 5.13s @21.1 — kind passes, more headroom |
+
+Routing correctness proven by pool-level backend counts (not response bodies):
+5 non-truncated requests → hot pool (2 replicas) +5; 5 truncated (`X-Flow-KV-Evict:
+true`) → cold pool (3 replicas) +5. Exact.
+
+Notes:
+- kind steady-state p50 came out *lower* than the docker runs. Do not read this as
+  "kind is faster than docker" — the docker 5-GPU baseline capped KV at
+  `num-gpu-blocks-override=6165` while this kind run let vLLM auto-size KV under
+  `--gpu-memory-utilization 0.90`, so the KV pool is larger here. This is exactly
+  the cross-generation comparability caveat (pitfalls.md #8): compare the
+  split-vs-unified *trend* within a run, not absolute QPS across setups.
+- Both topologies passed their baseline QPS with 100% success and steady p50 well
+  under the 6.5s SLO, confirming the kind + ingress-nginx + real vLLM chain carries
+  production traffic correctly at the docker-baseline load.

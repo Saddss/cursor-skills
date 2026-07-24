@@ -143,3 +143,27 @@ That makes **absolute QPS non-comparable across generations** — only the *rela
 "split vs unified" trend is comparable. Always record: block override, mem-util,
 PCIe link gen, offload cap, and per-hot-worker offload bytes (varies with hot
 count). Report these in the comparability section.
+
+## 9. device-plugin schedules onto denylisted/neighbor GPUs
+
+**Symptom.** On a shared host, K8s scheduled vLLM pods onto GPU2 (denylisted) and
+GPU7 (a neighbor's active process) because `resources.limits.nvidia.com/gpu: 1`
+only means "any one GPU" — the scheduler picks from all cards the device-plugin
+reports. One pod's engine init failed colliding with the neighbor; another grabbed
+the red-line card.
+
+**Root cause.** The NVIDIA device-plugin reports *all* visible GPUs. Nothing tells
+K8s which cards to avoid.
+
+**Fix.** Restrict the device-plugin to a UUID allowlist so the denied cards are
+physically unschedulable:
+```bash
+kubectl -n kube-system set env daemonset/nvidia-device-plugin-daemonset \
+  NVIDIA_VISIBLE_DEVICES="GPU-<uuid0>,GPU-<uuid1>,..."   # only the safe cards
+```
+Then `kubectl get node -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'` must
+equal the allowlist size, and a probe pod must land on an allowlisted UUID. Do NOT
+also set `DEVICE_LIST_STRATEGY=volume-mounts` when the node runs CDI mode — it
+injects `/var/run/nvidia-container-devices` which the CDI modifier rejects with
+"identifier is not a valid UUID or index", and every GPU pod fails with StartError.
+Leave the default strategy; `NVIDIA_VISIBLE_DEVICES` alone is enough.

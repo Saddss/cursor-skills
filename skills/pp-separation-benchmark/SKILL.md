@@ -18,11 +18,34 @@ The routing signal is a single boolean header (e.g. `X-Flow-KV-Evict: true`) emi
 
 For the science question ("does the split beat unified?"), the docker tier is *cleaner* — it removes network and scheduler noise and isolates the routing policy. Reach for the kind tier only to validate the K8s deployment form; do not use its absolute QPS to compare against the docker tier (kube-proxy/CNI add a hop, and single-node kind has no cross-node latency).
 
+## Portability — nothing here is host-specific
+
+This skill carries no baked-in machine assumptions. Everything is parameterized;
+adapt to a new host by setting values, not editing logic:
+
+- **Manifests** use `@@VAR@@` placeholders. Copy `scripts/env.example` → `my.env`,
+  fill it in (`VLLM_IMAGE`, `HF_HOST_PATH`, `MODEL_PATH`, `SERVED_MODEL`,
+  `DRAFT_PATH`), then `scripts/render-manifests.sh` writes ready-to-apply YAML.
+  `manifests/examples-verified/` holds a concrete, already-run copy for reference.
+- **kind GPU setup** (`scripts/setup-kind-gpu.sh`) reads `CLUSTER`, `NODE`,
+  `CDI_SPEC`, `GPU_ALLOWLIST` from the env — no hardcoded names.
+- **GPU count / ratios are free.** Use however many GPUs the host has. The ratios
+  (2h5c/3h4c/…) are just "hot count + cold count = total usable GPUs"; the sweep
+  logic and probe protocol are independent of the number. There is NO 5-GPU or
+  7-GPU assumption — those appear only as worked examples in the references.
+- **`GPU_ALLOWLIST` is optional and only for shared hosts.** On a dedicated
+  machine leave it empty to expose all GPUs; K8s schedules freely and you can
+  skip the denylist/neighbor concerns entirely. Set it only when other tenants
+  or reserved cards exist on the box (see pitfalls.md #9).
+- Any GPU indices, UUIDs, neighbor container names, or absolute paths in the
+  references are **examples from one run**, retained as evidence — not required
+  values. Read them as "this is what it looked like when it worked".
+
 ## Fixed workload contract (verify at session start, never mutate)
 
 - Lock the dataset by **SHA256 + row count + truncation rate** (within a tolerance band), verify strict timestamp ordering and strict-boolean truncation flags.
 - Truncation is both a **request-count** fraction and a **token-load** fraction — they differ (e.g. 52.9% of requests but 59.7% of token load). Allocate cold/hot by token load, not request count. See `scripts/workload_shape.py`.
-- Fix the GPU allowlist/denylist up front (e.g. use 0,1,3,4,5,6,7; never touch GPU2). Record whether `force_offload_override` is set and the PCIe link gen — a Gen1-downgraded link understates offload benefit (hit rate is unaffected; absolute capacity is).
+- On a shared host, fix the GPU allowlist/denylist up front (example from one run: use 0,1,3,4,5,6,7, never touch GPU2 — your host's safe set will differ). On a dedicated host, skip this. Record whether `force_offload_override` is set and the PCIe link gen — a Gen1-downgraded link understates offload benefit (hit rate is unaffected; absolute capacity is).
 
 ## Probe protocol
 
@@ -54,8 +77,11 @@ Low-frequency monitoring only. Never batch-stop containers, never touch denylist
 
 ## Files
 
-- `scripts/setup-kind-gpu.sh` — idempotent kind GPU passthrough via CDI (no host daemon changes).
+- `scripts/setup-kind-gpu.sh` — idempotent kind GPU passthrough via CDI (no host daemon changes); env-configurable (`CLUSTER`, `NODE`, `CDI_SPEC`, `GPU_ALLOWLIST`).
+- `scripts/render-manifests.sh` + `scripts/env.example` — fill the `@@VAR@@` placeholders in the manifests for any host.
 - `scripts/workload_shape.py` — split a replay dataset into hot/cold by count and token load.
-- `references/kind-manifests.md` — kind-config, ingress canary-by-header, real vLLM hot/cold pool Deployments, verification recipe.
-- `references/pitfalls.md` — the full list of hard-won fixes with symptoms and root causes.
+- `manifests/*.yaml` — templated kind-config, ingress canary-by-header, vLLM smoke pod, hot/cold pools. `manifests/examples-verified/` keeps a concrete already-run copy.
+- `references/kind-manifests.md` — bring-up order, routing rule, verification recipe, verified example results.
+- `references/pitfalls.md` — the hard-won fixes (docker-kill hang, failed_low, CDI passthrough, glibc/musl, webhook race, disk, extraMounts, comparability, GPU allowlist).
+- `references/docker-tier.md` — the docker+nginx policy-fidelity topology and controller/orchestrator design.
 - `references/docker-tier.md` — the docker+nginx policy-fidelity topology and controller/orchestrator design.

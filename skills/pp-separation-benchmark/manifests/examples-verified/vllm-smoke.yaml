@@ -1,5 +1,5 @@
 # 单个真 vLLM Pod 冒烟测试 —— 照搬 controller.py b0 worker 的启动参数(Kaon 模型)。
-# hostPath 挂 @@HF_HOST_PATH@@ 到 /root/.cache/huggingface(与 docker 版一致)。
+# hostPath 挂 /home/sesterce/hf 到 /root/.cache/huggingface(与 docker 版一致)。
 # 申请 1 张 GPU(device-plugin 分配),验证能加载模型 + 响应 /v1/models。
 apiVersion: v1
 kind: Pod
@@ -10,17 +10,17 @@ spec:
   restartPolicy: Never
   containers:
     - name: vllm
-      image: @@VLLM_IMAGE@@
+      image: ssadds/vllm:kaon-0.22-v1.4-kvevict
       imagePullPolicy: IfNotPresent
-      command: ["vllm","serve","@@MODEL_PATH@@",
+      command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
                 "--host","0.0.0.0","--port","8000",
-                "--served-model-name","@@SERVED_MODEL@@",
+                "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
                 "--max-model-len","8192","--max-num-seqs","64",
                 "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.94",
                 "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
                 "--quantization","compressed-tensors","--enable-prefix-caching",
                 "--speculative-config",
-                "{\"method\":\"mtp\",\"model\":\"@@DRAFT_PATH@@\",\"num_speculative_tokens\":3}",
+                "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
                 "--stream-interval","5","-O3"]
       env:
         - { name: HF_HUB_OFFLINE, value: "1" }
@@ -35,4 +35,4 @@ spec:
         - { name: hf, mountPath: /root/.cache/huggingface }
   volumes:
     - name: hf
-      hostPath: { path: @@HF_HOST_PATH@@, type: Directory }
+      hostPath: { path: /home/sesterce/hf, type: Directory }

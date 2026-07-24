@@ -1,0 +1,46 @@
+# 复刻 controller.py:485-509 nginx_config 的 header 分流:
+#   map $http_x_flow_kv_evict { ~^true$ cold_backend; default hot_backend; }
+# 在 ingress-nginx 里用「主 Ingress + canary-by-header Ingress」两条规则实现:
+#   - 主 Ingress: 所有请求默认 -> hot-svc(对应 default -> hot_backend)
+#   - canary Ingress: 当 header X-Flow-KV-Evict == "true" 时 -> cold-svc
+#     (对应 ~^true$ -> cold_backend)。canary-by-header 是 ingress-nginx 原生
+#     的按 header 值分流机制,精确匹配 "true"。
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: split-main
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hot-svc
+                port: { number: 80 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: split-cold-canary
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-by-header: "X-Flow-KV-Evict"
+    nginx.ingress.kubernetes.io/canary-by-header-value: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cold-svc
+                port: { number: 80 }

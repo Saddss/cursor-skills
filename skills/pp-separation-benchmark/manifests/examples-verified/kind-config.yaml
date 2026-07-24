@@ -13,8 +13,8 @@ nodes:
             node-labels: "ingress-ready=true"
     extraMounts:
       # 模型权重目录挂进节点,供 vLLM Pod hostPath 使用
-      - hostPath: @@HF_HOST_PATH@@
-        containerPath: @@HF_HOST_PATH@@
+      - hostPath: /home/sesterce/hf
+        containerPath: /home/sesterce/hf
         readOnly: true
     extraPortMappings:
       # host 38080 -> ingress-nginx NodePort; 38080 chosen to avoid qie/PP ports

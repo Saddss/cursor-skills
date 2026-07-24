@@ -15,17 +15,17 @@ spec:
       runtimeClassName: nvidia
       containers:
         - name: vllm
-          image: @@VLLM_IMAGE@@
+          image: ssadds/vllm:kaon-0.22-v1.4-kvevict
           imagePullPolicy: IfNotPresent
-          command: ["vllm","serve","@@MODEL_PATH@@",
+          command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
                     "--host","0.0.0.0","--port","8080",
-                    "--served-model-name","@@SERVED_MODEL@@",
+                    "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
                     "--max-model-len","8192","--max-num-seqs","64",
                     "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.90",
                     "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
                     "--quantization","compressed-tensors","--enable-prefix-caching",
                     "--speculative-config",
-                    "{\"method\":\"mtp\",\"model\":\"@@DRAFT_PATH@@\",\"num_speculative_tokens\":3}",
+                    "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
                     "--kv-transfer-config",
                     "{\"kv_connector\":\"SimpleCPUOffloadConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":21474836480}}",
                     "--stream-interval","5","-O3"]
@@ -41,7 +41,7 @@ spec:
             periodSeconds: 10
             failureThreshold: 60
           volumeMounts: [{ name: hf, mountPath: /root/.cache/huggingface }]
-      volumes: [{ name: hf, hostPath: { path: @@HF_HOST_PATH@@, type: Directory } }]
+      volumes: [{ name: hf, hostPath: { path: /home/sesterce/hf, type: Directory } }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -55,17 +55,17 @@ spec:
       runtimeClassName: nvidia
       containers:
         - name: vllm
-          image: @@VLLM_IMAGE@@
+          image: ssadds/vllm:kaon-0.22-v1.4-kvevict
           imagePullPolicy: IfNotPresent
-          command: ["vllm","serve","@@MODEL_PATH@@",
+          command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
                     "--host","0.0.0.0","--port","8080",
-                    "--served-model-name","@@SERVED_MODEL@@",
+                    "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
                     "--max-model-len","8192","--max-num-seqs","64",
                     "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.90",
                     "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
                     "--quantization","compressed-tensors","--enable-prefix-caching",
                     "--speculative-config",
-                    "{\"method\":\"mtp\",\"model\":\"@@DRAFT_PATH@@\",\"num_speculative_tokens\":3}",
+                    "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
                     "--stream-interval","5","-O3"]
           env:
             - { name: HF_HUB_OFFLINE, value: "1" }
@@ -78,4 +78,4 @@ spec:
             periodSeconds: 10
             failureThreshold: 60
           volumeMounts: [{ name: hf, mountPath: /root/.cache/huggingface }]
-      volumes: [{ name: hf, hostPath: { path: @@HF_HOST_PATH@@, type: Directory } }]
+      volumes: [{ name: hf, hostPath: { path: /home/sesterce/hf, type: Directory } }]

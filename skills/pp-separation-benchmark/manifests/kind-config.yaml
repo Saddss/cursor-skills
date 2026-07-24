@@ -1,0 +1,23 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: pp-split
+# Bridge networking only — no host network. Avoids colliding with the
+# qie-* containers' ports. Only the ingress port is mapped to the host.
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraMounts:
+      # 模型权重目录挂进节点,供 vLLM Pod hostPath 使用
+      - hostPath: /home/sesterce/hf
+        containerPath: /home/sesterce/hf
+        readOnly: true
+    extraPortMappings:
+      # host 38080 -> ingress-nginx NodePort; 38080 chosen to avoid qie/PP ports
+      - containerPort: 30080
+        hostPort: 38080
+        protocol: TCP

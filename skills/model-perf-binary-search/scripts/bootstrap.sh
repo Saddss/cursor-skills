@@ -5,7 +5,7 @@
 #
 # Steps:
 #   1. Verify shared disk mount (/mnt/shared/sss).
-#   2. Clone or update Saddss/llm-inference-benchmarking @ sss-test.
+#   2. Clone or update Saddss/llm-inference-benchmarking at the selected branch.
 #   3. uv venv + requirements.txt + requests.
 #   4. Copy the explicitly selected shared dataset into the workdir.
 #   5. bench-runs/ + health check.
@@ -13,14 +13,14 @@
 # Environment overrides (optional):
 #   LLM_BENCH_DIR              workdir (default: $HOME/llm-inference-benchmarking)
 #   LLM_BENCH_REPO_URL         default: https://github.com/Saddss/llm-inference-benchmarking
-#   LLM_BENCH_REPO_BRANCH      default: sss-test
+#   LLM_BENCH_REPO_BRANCH      default: feat/replay-conversation-causality
 #   LLM_BENCH_DATASET_SRC      required: selected file under <mount>/data
 #   LLM_BENCH_SHARED_MOUNT     default: /mnt/shared/sss
 
 set -euo pipefail
 
 REPO_URL="${LLM_BENCH_REPO_URL:-https://github.com/Saddss/llm-inference-benchmarking.git}"
-REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-sss-test}"
+REPO_BRANCH="${LLM_BENCH_REPO_BRANCH:-feat/replay-conversation-causality}"
 SHARED_MOUNT="${LLM_BENCH_SHARED_MOUNT:-/mnt/shared/sss}"
 SHARED_DATA_DIR="$SHARED_MOUNT/data"
 DATASET_SRC="${LLM_BENCH_DATASET_SRC:-}"
@@ -61,7 +61,7 @@ case "$CANONICAL_DATASET_SRC" in
   *) fail "数据集必须位于 $CANONICAL_SHARED_DATA_DIR：$CANONICAL_DATASET_SRC" ;;
 esac
 
-# 1) clone or update repo @ sss-test
+# 1) clone or update the selected benchmark branch
 if [ ! -d "$WORKDIR/.git" ]; then
   if [ -e "$WORKDIR" ] && [ -n "$(ls -A "$WORKDIR" 2>/dev/null)" ]; then
     fail "$WORKDIR exists and is non-empty but has no .git; move it aside or set LLM_BENCH_DIR."
@@ -81,6 +81,13 @@ fi
 for f in online_replay.py requirements.txt; do
   [ -f "$WORKDIR/$f" ] || fail "$WORKDIR/$f missing — wrong branch or incomplete clone"
 done
+
+if [ "$REPO_BRANCH" = "feat/replay-conversation-causality" ]; then
+  for flag in serialize-conversations continuous-qps-window preselected-route; do
+    grep -Eq -- "['\"]--$flag['\"]" "$WORKDIR/online_replay.py" ||
+      fail "$REPO_BRANCH is missing required online_replay.py flag --$flag"
+  done
+fi
 
 # 2) uv
 if ! command -v uv >/dev/null 2>&1; then

@@ -1,18 +1,41 @@
 ---
 name: model-perf-binary-search
-description: Find the maximum sustainable QPS of an LLM inference service that meets a p50 e2e latency SLO using online_replay.py and a binary search. Use when the user asks to "测最大 QPS"/"二分测性能"/"find max QPS"/"benchmark a model"/"perf test with SLO"/"调参测性能"/"在 X 基础上开启 Y 功能调优" against a local OpenAI-compatible server (e.g. vLLM, SGLang, TRT-LLM) and provides a startup command plus a QPS lower/upper bound. The skill is framework-agnostic, drives the user-supplied serving command, runs replay rounds (8 if no offload / 16 with offload), averages the per-round p50 over the last 4/8 rounds, compares against 6.5s by default, binary-searches QPS to 0.1 precision (extrapolating the upper bound when it still passes), reports progress every 15min (no offload) / 30min (offload), captures prefix-cache hit rate per probe in a framework-agnostic way (scrapes Prometheus /metrics and falls back to engine-specific log scraping or research when the standard endpoint does not expose prefix metrics), and optionally runs additional tuned-parameter sessions in two modes: Mode A (research every existing flag in the user's startup command against the official docs and the local GPU and propose better values), or Mode B (the user names a feature to enable but does not understand it; do a deep multi-stage investigation of that feature, tune the feature's own knobs, and co-adjust user-provided flags whose interactions are documented).
+description: >-
+  Find the maximum sustainable QPS of an LLM inference service that meets a
+  p50 e2e latency SLO using online_replay.py and a binary search. Use for
+  maximum-QPS benchmarks, SLO-based performance tests, and optional serving
+  configuration or feature tuning on local OpenAI-compatible servers.
 ---
 
 # Model Performance Binary Search
 
-Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives the `online_replay.py` script from `Saddss/llm-inference-benchmarking@sss-test` (carries the sampler / timeout / round-drain fixes; the upstream `FlowGPT/qq-test` is missing them and will not work against TRT-LLM or any saturated service) against a service that the user provides a startup command for, and binary-searches the QPS axis.
+Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives `online_replay.py` from `Saddss/llm-inference-benchmarking`. The default branch is `feat/replay-conversation-causality`, which preserves per-conversation request causality, sends continuously across reporting windows, and includes sequencer wait in client E2E latency. The legacy `sss-test` branch remains available when the user explicitly selects it.
 
 ## Dataset selection and bootstrap (must run at session start)
 
-Before every benchmark session, list the regular files under `/mnt/shared/sss/data` and ask the user to choose exactly one dataset. Never reuse the previous session's choice, infer a choice from filenames, or copy every dataset. After the user chooses:
+Before every benchmark session:
+
+1. List the regular files under `/mnt/shared/sss/data`.
+2. Ask the user to choose exactly one dataset.
+3. Ask the user to choose a benchmark branch. Present `feat/replay-conversation-causality` first and mark it as the default/recommended choice; also offer legacy `sss-test`.
+
+Never reuse a previous session's choices or infer them silently. If the user says to use defaults, select `feat/replay-conversation-causality`, but the dataset must still be explicit.
+
+The maintained test datasets are:
+
+| Dataset | Model/workload | Replay selection |
+|---------|----------------|------------------|
+| `/mnt/shared/sss/data/kaon-v3-test.jsonl` | Kaon-V3, 150k time-window workload | `--sample-range 0 min(0.02*qps, 1.0)` |
+| `/mnt/shared/sss/data/gemma4-31b-test.jsonl` | Gemma-4-31B, 20k preselected canonical route | `--preselected-route`; never combine with `--sample-range` |
+
+Both maintained datasets should use the default branch with
+`--serialize-conversations --continuous-qps-window`. The Gemma dataset depends
+on `--preselected-route`; do not pair it with a branch that lacks that flag.
+After the user chooses:
 
 ```bash
 export LLM_BENCH_DATASET_SRC="/mnt/shared/sss/data/<chosen-file>"
+export LLM_BENCH_REPO_BRANCH="feat/replay-conversation-causality"  # or sss-test
 eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh)"
 export LLM_BENCH_DIR="$WORKDIR"
 ```
@@ -20,7 +43,7 @@ export LLM_BENCH_DIR="$WORKDIR"
 What it does (idempotent):
 
 1. **Selection gate** — require one explicit `LLM_BENCH_DATASET_SRC` under `/mnt/shared/sss/data`. Missing mount, missing selection, empty files, and paths outside that directory fail immediately.
-2. **Clone or update** `https://github.com/Saddss/llm-inference-benchmarking.git` on branch **`sss-test`** (fetch + checkout + `pull --ff-only` when the repo already exists).
+2. **Clone or update** `https://github.com/Saddss/llm-inference-benchmarking.git` on the selected branch (default **`feat/replay-conversation-causality`**; fetch + checkout + `pull --ff-only` when the repo already exists).
 3. **Python env** — install `uv` if missing; create `$WORKDIR/.venv`; run `uv pip install -r requirements.txt` and `uv pip install requests`.
 4. **Dataset** — copy only the selected file to `$WORKDIR/datasets/<basename>`. Reuse a non-empty local file with that basename; never bulk-copy the shared directory.
 5. Create `$WORKDIR/bench-runs/`.
@@ -32,7 +55,7 @@ Environment overrides (optional):
 |----------|---------|
 | `LLM_BENCH_DIR` | `$HOME/llm-inference-benchmarking` |
 | `LLM_BENCH_REPO_URL` | `https://github.com/Saddss/llm-inference-benchmarking.git` |
-| `LLM_BENCH_REPO_BRANCH` | `sss-test` |
+| `LLM_BENCH_REPO_BRANCH` | `feat/replay-conversation-causality` |
 | `LLM_BENCH_SHARED_MOUNT` | `/mnt/shared/sss` |
 | `LLM_BENCH_DATASET_SRC` | Required selected file under `<mount>/data` |
 
@@ -75,18 +98,19 @@ The Python file is portable — invoke it with whichever python has `torch` inst
 
 ## Required inputs (ask the user up-front, in one message)
 
-1. **Replay dataset** — list `/mnt/shared/sss/data` and ask the user to choose one, even when only one file exists.
-2. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
-3. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
-4. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
+1. **Benchmark branch** — ask the user to choose `feat/replay-conversation-causality` (default/recommended) or legacy `sss-test`.
+2. **Replay dataset** — list `/mnt/shared/sss/data` and ask the user to choose one, even when only one file exists.
+3. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
+4. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
+5. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
    - `offload = OFF` -> run **8 rounds**, average **last 4** rounds' p50.
    - `offload = ON`  -> run **16 rounds**, average **last 8** rounds' p50.
-5. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
-6. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
-7. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
+6. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
+7. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
+8. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
    - **Mode A (generic tuning)**: "review my command and propose better values for what is already there"; or
    - **Mode B (feature enablement)**: "在 X 基础上开启 Y 功能, 你去调优性能" — i.e. the user names a specific feature/knob they want enabled but does not necessarily understand it themselves. Mode B triggers a deep, multi-stage investigation (see "Feature-enablement tuning" below) and is more expensive in wall-clock time, so make sure the user knows that.
-8. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Do **not** ask the user for repo clone, branch, venv, or a path outside the shared-dataset choice unless bootstrap failed.
+9. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Do **not** ask the user for repo clone, venv, or a path outside the shared-dataset choice unless bootstrap failed.
 
 If any of the above are missing, ask the user before starting.
 
@@ -189,7 +213,16 @@ Mode B never auto-extends into territory the user did not approve. Whenever you 
 
 - Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py`; pass `--input "$DATASET"`.
 - Always invoke Python through the workdir venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`.
-- Sample range is **always** `0.0 (0.02 * target_qps)`, capped at `1.0`. For `target_qps = 5.1` -> `0.0 0.102`; for `25` -> `0.0 0.5`; for `60` -> `0.0 1.0`.
+- On `feat/replay-conversation-causality`, always add
+  `--serialize-conversations --continuous-qps-window`. This keeps each
+  conversation causal while allowing different conversations to overlap,
+  avoids artificial per-round drain gaps, and counts sequencing wait in E2E.
+- Dataset selection mode is exclusive:
+  - `kaon-v3-test.jsonl`: use `--sample-range 0.0 (0.02 * target_qps)`,
+    capped at `1.0`.
+  - `gemma4-31b-test.jsonl`: use `--preselected-route` and omit
+    `--sample-range`; every row already belongs to the canonical route.
+  - For any other dataset, inspect its provenance before choosing one mode.
 - `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or override).
 - Production sampling (dataset has no per-request fields): `--max-tokens 200 --temperature 0.7` (plus `top_p` / penalties via CLI or `online_replay` prod defaults when omitted).
 - Use `--json-output` for per-round metrics.
@@ -250,11 +283,18 @@ Do **not** wait for an update window to also surface real failures (server crash
 
 Each binary-search step is one probe at a candidate QPS `q` (always rounded to the nearest 0.1). Procedure:
 
-1. Compute `sample_end = min(0.02 * q, 1.0)`.
+1. Select the dataset execution mode. For a hash-sampled dataset compute
+   `sample_end = min(0.02 * q, 1.0)`. For a preselected canonical route, use
+   the complete route and do not compute or pass a sample range.
 2. Pick `total_rounds` and `tail_window` from the offload flag (8/4 or 16/8).
 3. Choose output paths: `bench-runs/qps_{q}_{timestamp}.jsonl` for client metrics, plus `bench-runs/qps_{q}_{timestamp}.{before,after}.prom` for prefix-cache snapshots.
 4. **Snapshot the engine's `/metrics` endpoint** before any traffic is sent (see "Prefix cache hit rate" below). If that step returns `NO_PREFIX_METRICS` or the endpoint is unreachable, follow the fallback flow described there.
-5. Run **one** `online_replay.py` process for `q <= 10`. For `q > 10`, shard the load across `n = ceil(q / 10)` parallel processes, each with `--target-qps {q/n}` and a `--sample-range` chunk of width `sample_end / n` (so the union covers `[0, sample_end)`). Each shard writes to its own json file.
+5. Run **one** `online_replay.py` process for `q <= 10`. Hash-sampled
+   datasets may be sharded above 10 QPS across
+   `n = ceil(q / 10)` processes, each with `--target-qps {q/n}` and a
+   non-overlapping sample-range chunk. Do not range-shard a preselected route;
+   use one process unless the selected branch provides an explicit
+   route-sharding mechanism.
 6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 8/16 rounds.
 7. **Snapshot `/metrics` again** immediately after the last shard exits, then run the prefix-cache diff helper. Cache the resulting `hit_rate` for the per-probe report.
 8. Decide PASS/FAIL with the bundled helper. **Always pass `--auto-steady`** unless the user explicitly asks for the legacy tail-only behavior:
@@ -287,6 +327,8 @@ cd "$LLM_BENCH_DIR" && \
     --preload-time 2 \
     --replay-mode qps --target-qps 5.1 \
     --sample-range 0.0 0.102 \
+    --serialize-conversations \
+    --continuous-qps-window \
     --api-base http://localhost:8080/v1 \
     --api-key "$(printf 'a%.0s' {1..32})" \
     --model your-model-name \
@@ -305,6 +347,15 @@ cd "$LLM_BENCH_DIR" && \
     --e2e-slo 6.5 \
     --json-output bench-runs/qps_5.1_20260101_120000.jsonl
 ```
+
+For `gemma4-31b-test.jsonl`, replace the `--sample-range` line with
+`--preselected-route`. Never pass both. On the legacy `sss-test` branch, omit
+the two causality flags only when the user explicitly chose legacy behavior.
+
+For the default branch, record `wire_dispatch_qps`, `completion_qps`,
+`Server Latency`, and `Sequencer Wait` when present. Use client E2E latency for
+the SLO decision; server latency alone excludes client scheduling and
+conversation sequencing delay.
 
 ### Prefix cache hit rate (per-probe, framework-agnostic)
 

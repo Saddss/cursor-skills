@@ -11,9 +11,20 @@ description: >-
 
 Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives `online_replay.py` from `Saddss/llm-inference-benchmarking`. The default branch is `feat/replay-conversation-causality`, which preserves per-conversation request causality, sends continuously across reporting windows, and includes sequencer wait in client E2E latency. The legacy `sss-test` branch remains available when the user explicitly selects it.
 
-## Dataset selection and bootstrap (must run at session start)
+## Scenario selection
 
-Before every benchmark session:
+Keep the standard workflow as the default. When the user explicitly asks for
+AutoReply or asks whether to use its M12 production-shaped workload, offer the
+AutoReply scenario below as an additional choice. Enter it only after the user
+selects it for the current session. Otherwise, follow every existing standard
+dataset, bootstrap, input, sampling, and round-count rule unchanged.
+
+Do not infer the AutoReply scenario from a generic `n=3`, M12, or 2-second SLO
+request alone; those settings can occur in unrelated workloads.
+
+## Standard scenario: dataset selection and bootstrap (must run at session start)
+
+For every standard benchmark session:
 
 1. List the regular files under `/mnt/shared/sss/data`.
 2. Ask the user to choose exactly one dataset.
@@ -65,6 +76,62 @@ Bootstrap returns exit 0 when setup succeeded (even if health check reports warn
 
 All later commands assume `$LLM_BENCH_DIR` has `.venv/` and `online_replay.py`, and use `$DATASET` as the replay input.
 
+## AutoReply M12 production scenario
+
+This is an opt-in alternative to the standard scenario, not a change to it.
+Use it only when the user explicitly selects AutoReply for the current session.
+Its preselected production-shaped route replaces the standard dataset/bootstrap,
+sampling, and round-count defaults only inside that selected session.
+
+- Worktree: `/root/llm-inference-benchmarking` on
+  `feat/replay-conversation-causality`. If it already has local changes, **do
+  not run bootstrap** and do not checkout `sss-test`.
+- Build and verify:
+  `scripts/build_autoreply_prod_datasets.py`, then
+  `scripts/verify_autoreply_dataset.py`. The canonical files are
+  `datasets/autoreply_prod_dist_1000.jsonl` (exactly 1000 rows) and
+  `datasets/autoreply_prod_boundary_300.jsonl` (at least 300 rows). The verify
+  report is `datasets/autoreply_prod_verify.json`.
+- The 1000-row token quotas are: `<1k=37`, `1k-2k=108`, `2k-3k=108`,
+  `3k-3.5k=77`, `3.5k-3.8k=283`, `3.8k-4k=373`, `4k-4095=9`,
+  `4096-8k=5`. Boundary coverage includes the 3743 trim edge, fixed-prompt
+  4k-6k/6k-8k/8100-8142 tails, long personality, 50/51 turns, same-role merge,
+  long single messages, multilingual, and direct/V4 async entry points.
+- Always use `--preselected-route`; never combine this route with
+  `--sample-range`. Use `--serialize-conversations
+  --continuous-qps-window`. A 12-round continuous run needs enough input rows;
+  build `datasets/autoreply_prod_dist_repeated_13x.jsonl` with
+  `scripts/build_autoreply_repeated_route.py` and use it for probes. It repeats
+  complete shuffled 1000-row cycles; do not replay a bucket-grouped file or a
+  1000-row file that exhausts before `qps * 360s`.
+- Request parameters are fixed:
+  `--max-tokens 50 --temperature 0.7 --top-p 0.8
+  --frequency-penalty 0.01 --presence-penalty 0.01 --disable-min-p
+  --extra-body-json '{"n":3,"stop":["<|im_end|>"],"top_k":-1}'`.
+  Do not send the generic `top_k=40`, `min_p=0.1`, or `max_tokens=200`.
+- `n=3` means **one HTTP request = one QPS unit = three completions**. Never
+  multiply or divide the benchmark's target HTTP QPS by three. When comparing
+  against an engine-side completion/sequence-rate metric, explicitly label the
+  conversion (`HTTP QPS * 3`) instead of treating the two metrics as the same
+  unit. Verify once with non-streaming `len(choices)==3` and streaming choice
+  indices `0,1,2`.
+- Production prefix-cache token hit rate is about **66%-67%**. Snapshot
+  `/metrics` before/after every probe and diff
+  `vllm:prefix_cache_hits_total / vllm:prefix_cache_queries_total`. A material
+  mismatch invalidates alignment: check `n=3`, cross-request duplicate prefix
+  blocks, route ordering, and cache eviction before accepting QPS results.
+- Start `scripts/launch_autoreply_m12_prod.sh`; container name is
+  `autoreply-m12-prod`, image is `vllm/vllm-openai:v0.27.1`, and the Docker
+  command must set `--entrypoint python3`. Do not touch other containers.
+- Baseline method: offload=OFF, SLO strictly `<2.0s`, precision `0.1`,
+  `--round-duration 30 --max-rounds 12`, analyzer `--tail-window 6
+  --auto-steady`. Probe LOW before HIGH; the historical production anchor is
+  about 28 QPS, but its HTTP-vs-engine metric layer must be confirmed and it is
+  not a reason to skip safe lower probes.
+- The full construction rationale and constraints are in
+  `/root/HANDOFF-autoreply-prod-bench.md`. Do not commit or push skill changes
+  unless the user explicitly asks.
+
 ## Pre-flight health check (gates offload runs)
 
 Right after bootstrap, **always** read `$LLM_BENCH_DIR/.health_check.json` and act on its top-level `exit` field. The check covers:
@@ -96,7 +163,7 @@ When `exit >= 1`, **paste the relevant `issues_red` / `issues_warn` strings verb
 
 The Python file is portable — invoke it with whichever python has `torch` installed. The script gracefully degrades when torch is missing (skips the BW measurement and warns about it instead of failing).
 
-## Required inputs (ask the user up-front, in one message)
+## Standard scenario: required inputs (ask the user up-front, in one message)
 
 1. **Benchmark branch** — ask the user to choose `feat/replay-conversation-causality` (default/recommended) or legacy `sss-test`.
 2. **Replay dataset** — list `/mnt/shared/sss/data` and ask the user to choose one, even when only one file exists.

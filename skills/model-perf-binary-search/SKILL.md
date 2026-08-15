@@ -109,6 +109,16 @@ sampling, and round-count defaults only inside that selected session.
   --frequency-penalty 0.01 --presence-penalty 0.01 --disable-min-p
   --extra-body-json '{"n":3,"stop":["<|im_end|>"],"top_k":-1}'`.
   Do not send the generic `top_k=40`, `min_p=0.1`, or `max_tokens=200`.
+- **TensorRT-LLM opt-in compatibility path:** only when the selected server is
+  TensorRT-LLM and its live OpenAI schema/defaults have been verified, represent
+  disabled top-k canonically as Python `top_k=None`, then omit that None-valued
+  static `extra_body` key before JSON serialization. TensorRT-LLM 1.2.1 defaults
+  an omitted `top_k` to `0`, which disables top-k. Literal JSON `"top_k": null`
+  is not omission and fails integer validation; `top_k=-1` also fails. Record
+  all three wire probes before benchmarking. Keep `n`, stop, max tokens,
+  temperature, top-p, penalties, and disabled min-p unchanged. Do not use this
+  adapter for vLLM or standard scenarios; their existing request paths remain
+  unchanged.
 - `n=3` means **one HTTP request = one QPS unit = three completions**. Never
   multiply or divide the benchmark's target HTTP QPS by three. When comparing
   against an engine-side completion/sequence-rate metric, explicitly label the

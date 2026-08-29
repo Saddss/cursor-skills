@@ -16,9 +16,9 @@
   </defs>
   <rect width="1600" height="820" fill="#fff"/>
   <rect x="180" y="310" width="360" height="180" rx="8" class="boundary" data-anchor-id="source" data-boundary-obstacle="true"/>
-  <text x="360" y="405" text-anchor="middle" class="t s">Source module</text>
+  <text x="360" y="405" text-anchor="middle" class="t s" data-typography-group="peer-module-title">Source module</text>
   <rect x="1060" y="310" width="360" height="180" rx="8" class="boundary" data-anchor-id="target" data-boundary-obstacle="true"/>
-  <text x="1240" y="405" text-anchor="middle" class="t s">Target module</text>
+  <text x="1240" y="405" text-anchor="middle" class="t s" data-typography-group="peer-module-title">Target module</text>
   <path d="M555 400H1045" class="arrow" marker-end="url(#arrowhead)"
         data-source-id="source" data-source-side="right"
         data-target-id="target" data-target-side="left" data-obstacle="true"/>

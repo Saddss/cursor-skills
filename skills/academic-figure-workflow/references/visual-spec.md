@@ -20,6 +20,8 @@ Apply these rules to mechanism, architecture, workflow, and conceptual figures. 
 - Never use half-width/full-width spaces to create layout. Position text with coordinates, `dx`, or separate explicitly anchored elements.
 - Avoid centred mixed-font implicit `<tspan>` runs. Give each segment an explicit anchor/coordinate when mixed typography is required.
 - Keep multi-line text line height at least 1.20 times the font size.
+- Typography follows semantic roles. Parallel conclusions, peer module titles, paired candidates, peer flow nodes, and peer legend labels must use identical font family, size, and weight.
+- Mark such peers with the same `data-typography-group`. The allowed size spread is 0 px and the family/weight sets must each contain exactly one value. If one label is too long, widen or reflow the component; never shrink only that label.
 
 ## Text clearance
 
@@ -46,7 +48,15 @@ Every structural arrow must specify source and target semantics:
 - Labels bound to arrows sit 1.0–4.0 mm away.
 - An arrowhead points to the target side centre, not merely somewhere on the right/left boundary.
 - Same-role arrows form an isomorphic style group: line width and head-size dispersion no more than 0.1 px, length dispersion no more than 0.3 mm when equal length is intended, and parallel-angle error no more than 0.5 degrees.
+- Every arrow colour or line style that carries a reusable semantic meaning must have exactly one matching legend entry. Mark the structural arrow with `data-legend-key` and its legend sample with the same value in `data-legend-for`. A local process arrow may omit the legend only when an adjacent label states its complete meaning.
 - Do not delete a semantically required arrow to make QA pass.
+- Before coordinates, maintain an edge ledger containing `source → relation → target`, source side, target side, and whether the edge is structural, internal, feedback, or annotation.
+- At 160 mm final width, a primary structural arrow should have at least 5 mm of visible shaft. A shorter result is a layout failure: enlarge the channel or reduce adjacent module width; do not compensate with an oversized head.
+- Prefer a straight horizontal or vertical connector. If a turn is unavoidable, use one broad curve or one bend with a clear routing channel. Border-following, corner-grazing, and consecutive short bends are forbidden.
+- A junction node is allowed only when it represents a real aggregation, comparison, or synchronization operation. Independent flows entering one container must use distinct named ports; cosmetic “merge” nodes and anonymous line intersections are forbidden.
+- Paired candidates must use identical card dimensions and label baselines. Their internal quantitative marks share a baseline, while arrows into the selector are equal-length mirrors or strictly parallel equivalents.
+- Treat nested containers as two relations: external source → intact container, then contained source → contained target. Never erase or open the outer border to route a line through it.
+- Place feedback edges in a dedicated band. When possible reverse the slow-control layout so its ordinary edges remain straight and the whole loop needs only one broad return curve.
 
 ### Non-circular markers
 
@@ -89,3 +99,5 @@ Triangles are easily misread as arrowheads. When a diagonal leader points to a t
 - `data-stack-group`, `data-stack-order`: vertical information group.
 - `data-arrow-style-group`: arrows that must share style/length/direction.
 - `data-axis-title` and `data-axis-part`: axis-title clearance and name/symbol spacing.
+- `data-typography-group`: peer text whose font family, size, and weight must match exactly.
+- `data-legend-key` and `data-legend-for`: semantic arrow style and its required legend sample; their key sets must be identical.

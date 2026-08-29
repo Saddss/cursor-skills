@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,16 @@ from font_glyph_audit import audit_svg_fonts
 
 MM_TO_CSS_PX = 96 / 25.4
 PREVIEW_DPI = 600
+
+
+def svg_width_mm(svg_text: str) -> float:
+    match = re.search(r'<svg\b[^>]*\bwidth=["\']\s*([0-9.]+)\s*(mm|cm|in|pt|px)?["\']', svg_text)
+    if not match:
+        raise ValueError("SVG root is missing a numeric width")
+    value = float(match.group(1))
+    unit = match.group(2) or "px"
+    factors = {"mm": 1.0, "cm": 10.0, "in": 25.4, "pt": 25.4 / 72.0, "px": 25.4 / 96.0}
+    return value * factors[unit]
 
 
 def _chromium_path() -> str | None:
@@ -118,6 +129,55 @@ async def inspect_svg(page: Any, svg_path: Path) -> dict[str, Any]:
             if (implicitSegments.length > 1 && segmentFamilies.size > 1) {
               issues.push({type:'centered-mixed-font-tspan', label:labelOf(text),
                            families:[...segmentFamilies]});
+            }
+          }
+
+          const typographyGroups = new Map();
+          for (const item of svg.querySelectorAll('text[data-typography-group]')) {
+            const id = item.getAttribute('data-typography-group');
+            if (!typographyGroups.has(id)) typographyGroups.set(id, []);
+            typographyGroups.get(id).push(item);
+          }
+          for (const [id, items] of typographyGroups) {
+            if (items.length < 2) continue;
+            const styles = items.map(item => getComputedStyle(item));
+            const sizes = styles.map(style => Number.parseFloat(style.fontSize));
+            const weights = [...new Set(styles.map(style => style.fontWeight))];
+            const families = [...new Set(styles.map(style => style.fontFamily))];
+            const sizeSpreadPx = Math.max(...sizes) - Math.min(...sizes);
+            semanticMetrics.push({typographyGroup:id,
+                                  itemCount:items.length,
+                                  sizeSpreadPx:Number(sizeSpreadPx.toFixed(2)),
+                                  sizesPx:[...new Set(sizes)].sort((a,b)=>a-b),
+                                  weights,
+                                  families});
+            if (sizeSpreadPx > 0.1 || weights.length > 1 || families.length > 1) {
+              issues.push({type:'typography-group-mismatch', group:id,
+                           labels:items.map(labelOf),
+                           sizesPx:[...new Set(sizes)].sort((a,b)=>a-b),
+                           weights, families});
+            }
+          }
+
+          const semanticArrowKeys = new Set(
+            [...svg.querySelectorAll('[data-legend-key]')]
+              .map(item => item.getAttribute('data-legend-key'))
+              .filter(Boolean)
+          );
+          const legendKeys = new Set(
+            [...svg.querySelectorAll('[data-legend-for]')]
+              .map(item => item.getAttribute('data-legend-for'))
+              .filter(Boolean)
+          );
+          if (semanticArrowKeys.size || legendKeys.size) {
+            const missing = [...semanticArrowKeys].filter(key => !legendKeys.has(key)).sort();
+            const orphan = [...legendKeys].filter(key => !semanticArrowKeys.has(key)).sort();
+            semanticMetrics.push({legendCoverage:true,
+                                  semanticKeys:[...semanticArrowKeys].sort(),
+                                  legendKeys:[...legendKeys].sort(),
+                                  missing, orphan});
+            if (missing.length || orphan.length) {
+              issues.push({type:'arrow-legend-coverage-mismatch', missing, orphan});
             }
           }
 
@@ -642,7 +702,7 @@ def render_exports(svg_path: Path, export_pdf: bool) -> dict[str, Any]:
     stem = svg_path.stem
     png_path = svg_path.with_name(f"{stem}-预览.png")
 
-    width_mm = float(svg_path.read_text(encoding="utf-8").split('width="', 1)[1].split('mm"', 1)[0])
+    width_mm = svg_width_mm(svg_path.read_text(encoding="utf-8"))
     output_width = round(width_mm / 25.4 * PREVIEW_DPI)
     cairosvg.svg2png(bytestring=svg_bytes, write_to=str(png_path), output_width=output_width)
     pdf_path = svg_path.with_suffix(".pdf")
@@ -666,9 +726,10 @@ async def main() -> int:
     parser.add_argument("directory", nargs="?", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--audit-only", action="store_true", help="inspect without writing exports or reports")
     parser.add_argument("--pdf", action="store_true", help="also export vector PDF; PNG is always written")
+    parser.add_argument("--pattern", default="*.svg", help="SVG filename glob, for example '图3-*.svg'")
     args = parser.parse_args()
     directory = args.directory.resolve()
-    svg_paths = sorted(directory.glob("*.svg"))
+    svg_paths = sorted(directory.glob(args.pattern))
     if not svg_paths:
         raise SystemExit(f"No SVG figures found in {directory}")
 
@@ -888,6 +949,20 @@ async def main() -> int:
                 f"箭头尺寸离散 {max(metric['markerWidthSpread'], metric['markerHeightSpread']):.2f}，"
                 f"平行角度误差 {metric['parallelErrorDeg']:.2f}°，"
                 f"长度离散 {metric['lengthSpreadMm']:.2f} mm"
+            )
+    typography_metrics = [
+        metric
+        for result in results
+        for metric in result.get("semanticMetrics", [])
+        if "typographyGroup" in metric
+    ]
+    if typography_metrics:
+        lines.extend(["", "## 同级字号组", ""])
+        for metric in typography_metrics:
+            lines.append(
+                f"- `{metric['typographyGroup']}`：{metric['itemCount']} 项，"
+                f"字号离散 {metric['sizeSpreadPx']:.2f} px，"
+                f"字重 {', '.join(metric['weights'])}"
             )
     lines.extend(["", "## 未通过项", ""])
     if issue_count:

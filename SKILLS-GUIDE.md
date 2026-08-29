@@ -518,7 +518,7 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 
 ### `academic-figure-workflow`
 
-**干什么**：创建、重排并验收论文/学位论文中的 SVG 机理图和架构图。先固定论证合同和最终物理尺寸，再使用可测试的文字、模块与箭头几何契约；内置 600 dpi 预览、真实字体包围盒检查、箭头对齐门禁、已知失败模式以及 DOCX/WPS 插入验收。
+**干什么**：创建、重排并验收论文/学位论文中的 SVG 机理图和架构图。新图先建立论证、节点—边、字号、图例和重复结构台账，再使用可测试的语义元数据生成；内置 600 dpi 预览、真实字体包围盒、箭头端点、同级字号、图例闭合以及 DOCX/WPS 最小变更门禁。用户指出一次系统性缺陷后，会审计整组插图并把它升级成自动回归规则，而不是只改截图坐标。
 
 **示例**：
 ```text
@@ -528,7 +528,14 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 ```
 
 ```bash
-uv run ~/.cursor/skills/academic-figure-workflow/scripts/qa_svg.py /path/to/figures
+uv run ~/.cursor/skills/academic-figure-workflow/scripts/qa_svg.py /path/to/figures --pattern '图3-*.svg'
+```
+
+同尺寸 Word 插图替换必须保持全部 XML 不变：
+
+```bash
+uv run ~/.cursor/skills/academic-figure-workflow/scripts/docx_change_guard.py replace \
+  baseline.docx revised.docx --rel-id rId5 --replacement figure.png
 ```
 
 ---

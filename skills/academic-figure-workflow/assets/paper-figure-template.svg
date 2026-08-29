@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="160mm" height="82mm" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">Academic figure template</title>
+  <desc id="desc">Editable SVG starter with testable module and arrow geometry.</desc>
+  <defs>
+    <style><![CDATA[
+      .t{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#26323b;font-weight:400;font-style:normal;text-shadow:none}
+      .l{font-size:26px}.s{font-size:22px}.xs{font-size:19px}
+      .math{font-family:"Liberation Sans",Arial,sans-serif;font-size:20px;font-weight:400;font-style:normal;fill:#26323b;text-shadow:none}
+      .boundary{fill:#fff;stroke:#9aa4ab;stroke-width:1.5}
+      .arrow{stroke:#52606b;stroke-width:2.6;fill:none}
+    ]]></style>
+    <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#52606b"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="820" fill="#fff"/>
+  <rect x="180" y="310" width="360" height="180" rx="8" class="boundary" data-anchor-id="source" data-boundary-obstacle="true"/>
+  <text x="360" y="405" text-anchor="middle" class="t s">Source module</text>
+  <rect x="1060" y="310" width="360" height="180" rx="8" class="boundary" data-anchor-id="target" data-boundary-obstacle="true"/>
+  <text x="1240" y="405" text-anchor="middle" class="t s">Target module</text>
+  <path d="M555 400H1045" class="arrow" marker-end="url(#arrowhead)"
+        data-source-id="source" data-source-side="right"
+        data-target-id="target" data-target-side="left" data-obstacle="true"/>
+</svg>

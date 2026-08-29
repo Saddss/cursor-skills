@@ -135,11 +135,12 @@ bash scripts/install.sh
 ### Serving benchmark & 容量（自有 + BBuf）
 
 - `model-perf-binary-search/` — 已知 serve 配置下，p50 e2e SLO 的最大 QPS 二分搜索（Mode A 调参 / Mode B feature 对比）。**自有实现。**
+- `pp-separation-benchmark/` — 对比统一缓存感知基线与截断/未截断请求冷热分池，扫描 GPU 配比并验证 QPS、分池 SLO、命中率和负载均衡。**自有实现。**
 - `llm-serving-auto-benchmark/` — 跨框架（SGLang/vLLM/TRT-LLM）公平 benchmark + search_space 扫 launch 参数；带 cookbook YAML。**BBuf vendored。**
 - `llm-serving-capacity-planner/` — 解析 serving 启动 log → KV pool / CUDA graph / max concurrency。**BBuf vendored。**
 - `model-compute-simulation/` — 从 model config 估 FLOPs/MFU、算子 shape、TP/EP what-if。**BBuf vendored。**
 
-典型链路：`llm-serving-auto-benchmark` → `model-perf-binary-search` → `llm-serving-capacity-planner`。
+典型链路：`llm-serving-auto-benchmark` → `model-perf-binary-search` → `llm-serving-capacity-planner`；验证冷热分池时使用 `pp-separation-benchmark`。
 
 ### Profiler & 性能（NVIDIA + BBuf）
 

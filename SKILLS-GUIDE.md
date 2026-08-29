@@ -34,6 +34,33 @@ client 用 online_replay.py，结果写到 bench-runs/kvbm_bw_study/phase8_bs/
 
 ---
 
+### `pp-separation-benchmark`
+
+**干什么**：在同一 GPU 预算和多轮对话回放负载下，对比**统一缓存感知基线**与**截断/未截断请求冷热分池**。它会同时统计请求数和 token 负载占比，二分测量基线最大可持续 QPS，扫描热/冷 GPU 配比，并在总体、热池、冷池 SLO 以及池内不均衡度约束下选出最优配比。
+
+**两种验证层级**：
+
+- 默认的 policy-fidelity 层使用 Docker + nginx，用于回答“冷热分离是否值得”，并尽量排除 CNI/kube-proxy 噪声。
+- orchestration-fidelity 层使用 kind + ingress-nginx + NVIDIA device-plugin，用于验证 Kubernetes 部署形式；不把它的绝对 QPS 与 Docker 层直接比较。
+
+**示例**：
+```text
+@pp-separation-benchmark
+用这份多轮对话 replay 数据集，对比统一缓存感知基线与冷热分池。
+先跑 Docker + nginx 层，分析截断请求/token 占比，扫热冷 GPU 配比，
+在 p50 e2e SLO 下报告最大 QPS、分池延迟、缓存命中率和池内不均衡度。
+```
+
+```bash
+# 先检查数据集的冷热请求数和 token 负载形状
+cd ~/.cursor/skills/pp-separation-benchmark
+python3 scripts/workload_shape.py --help
+```
+
+**关键约束**：热/冷卡数之和等于可用 GPU 总数，并按 token 负载而不是仅按请求数分配；一个配比连最低 QPS 都无法通过时应记录为 `failed_low` 并继续扫描，不应将整个实验当作异常终止。共享宿主机上不得修改全局 Docker 配置、重启宿主机 Docker 或触碰非授权 GPU。
+
+---
+
 ### `llm-serving-auto-benchmark`
 
 **干什么**：**跨框架**（SGLang / vLLM / TensorRT-LLM）在相同 workload、GPU、SLA 下公平对比，用 `search_space` 扫 launch 参数；内置 40+ 模型 cookbook YAML。

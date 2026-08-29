@@ -4,7 +4,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [SKILLS-GUIDE.md](SKILLS-GUIDE.md) | **36** 个 skill：触发方式、示例、速查表 |
+| [SKILLS-GUIDE.md](SKILLS-GUIDE.md) | **38** 个 skill：触发方式、示例、速查表 |
 | [RULES-GUIDE.md](RULES-GUIDE.md) | **4** 条 rule：作用、与 skill 区别、速查表 |
 
 ---
@@ -33,7 +33,7 @@ bash ~/.cursor/cursor-skills/scripts/install.sh
 
 ```bash
 readlink ~/.cursor/skills ~/.cursor/rules
-ls ~/.cursor/cursor-skills/skills | wc -l   # 36
+ls ~/.cursor/cursor-skills/skills | wc -l   # 38
 ls ~/.cursor/cursor-skills/rules/*.mdc      # 4
 ```
 
@@ -99,7 +99,7 @@ bash scripts/install.sh
 ```text
 ~/.cursor/
 ├── cursor-skills/          ← git clone 根目录（在这里 commit）
-│   ├── skills/             ← 36 个 skill
+│   ├── skills/             ← 38 个 skill
 │   ├── rules/              ← 4 个 .mdc
 │   ├── scripts/
 │   │   ├── install.sh
@@ -128,7 +128,7 @@ bash scripts/install.sh
 
 ---
 
-## 当前 skills（36 个）
+## 当前 skills（38 个）
 
 详见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)（含示例与速查表）。
 
@@ -166,6 +166,10 @@ bash scripts/install.sh
 ### 学习与文档（anthropics）
 
 - `pdf/`, `docx/`, `pptx/`
+
+### 学术作图（自有）
+
+- `academic-figure-workflow/` — 论文 SVG 机理/架构图，包含论证合同、几何门禁、600 dpi 预览、DOCX/WPS 插入验收和已知失败模式。
 
 ## 已移除的低价值 / 冗余 skill
 

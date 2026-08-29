@@ -1,6 +1,6 @@
 # Skills 使用指南
 
-本仓库共 **36 个** skill，源文件在 `~/.cursor/cursor-skills/skills/`（运行时经 symlink 暴露在 `~/.cursor/skills/`）。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **38 个** skill，源文件在 `~/.cursor/cursor-skills/skills/`（运行时经 symlink 暴露在 `~/.cursor/skills/`）。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
 
 **4 条全局 Rules**（自动生效，无需 @）→ [RULES-GUIDE.md](RULES-GUIDE.md)
 
@@ -488,6 +488,23 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 ---
 
 ## 六、学习与文档
+
+### `academic-figure-workflow`
+
+**干什么**：创建、重排并验收论文/学位论文中的 SVG 机理图和架构图。先固定论证合同和最终物理尺寸，再使用可测试的文字、模块与箭头几何契约；内置 600 dpi 预览、真实字体包围盒检查、箭头对齐门禁、已知失败模式以及 DOCX/WPS 插入验收。
+
+**示例**：
+```text
+@academic-figure-workflow
+把这段方法重排成 160 mm 宽的论文架构图，保留可编辑 SVG，
+做文字碰撞和箭头中心线 QA，通过后再插入 WPS 文档。
+```
+
+```bash
+uv run ~/.cursor/skills/academic-figure-workflow/scripts/qa_svg.py /path/to/figures
+```
+
+---
 
 ### `pdf`
 

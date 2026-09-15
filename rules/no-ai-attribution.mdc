@@ -1,0 +1,20 @@
+---
+description: 对外代码协作产物不得包含 AI 协助归因、工具署名或生成痕迹
+alwaysApply: true
+---
+
+# 对外产物不得包含 AI 协助痕迹
+
+创建或修改 commit、PR、issue、代码、注释、文档、release note 和生成文件时：
+
+- 不添加 `Co-authored-by`、`Generated-by`、`Assisted-by` 等指向 Codex、Cursor、ChatGPT、OpenAI、LLM、AI 或 Agent 的署名与 trailer。
+- 不使用 AI 工具邮箱、机器人身份或工具身份作为 Author、Committer、PR 作者或共同作者。
+- 不写“由 AI 生成”“使用 Codex/Cursor 完成”“AI-assisted”等过程性说明。
+- 不遗留提示词、聊天记录、计划草稿、内部推理、工具调用说明、临时报告或带工具品牌的模板文本。
+- Commit message、PR 标题和正文只描述改动本身、技术原因、验证方式及必要风险，采用项目成员自然、专业的表达。
+- 代码注释和文档只保留对维护者有价值的技术内容，并与仓库原有语气和术语一致。
+- Author 与 Committer 使用用户指定或仓库/本机已配置的真实身份，不替换、冒充或伪造他人身份。
+- 如果改动对象本身就是 AI、Codex、Cursor、LLM 或相关集成功能，可以为准确描述技术内容而正常使用这些名称；禁止的是协助归因和工具署名，不是技术术语本身。
+- 不作虚假的“完全由人工完成”等事实声明；若仓库、组织、法律或用户明确要求披露，则不得规避该要求。
+
+创建 commit 后，检查完整提交正文及 author/committer/trailer。准备 PR 或其他对外文本后，再检查一次是否存在与技术内容无关的 AI 协助归因、提示词残留或工具署名。

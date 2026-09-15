@@ -1,0 +1,12 @@
+---
+description: Git 提交默认使用语义化 feature 分支并汇报提交状态
+alwaysApply: true
+---
+
+# Git 分支与提交
+
+- 创建 commit 前检查并说明当前分支。
+- 默认不直接在 `main`、`master` 或受保护默认分支上提交；从当前工作点创建语义明确的 feature 分支。
+- 如果用户或仓库流程明确要求在当前分支提交，则遵循该要求，不额外创建分支。
+- 提交后汇报分支名、commit hash、是否已 push，并检查工作区状态。
+- 不主动 fetch、push、merge、rebase 或改写历史，除非任务明确需要并已获得相应授权。

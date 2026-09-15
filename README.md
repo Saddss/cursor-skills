@@ -6,7 +6,17 @@
 
 **中文说明 + 使用示例** → 见 [SKILLS-GUIDE.md](SKILLS-GUIDE.md)
 
-## 当前 skills（25 个）
+## 全局 rules
+
+`rules/` 保存跨项目的 Cursor 规则。同步到 Cursor 全局目录：
+
+```bash
+bash scripts/install-rules.sh
+```
+
+安装脚本不会覆盖内容不同的现有规则；发生冲突时会停止并报告目标文件。
+
+## 当前 skills（26 个）
 
 ### Serving benchmark & 容量（自有 + BBuf）
 
@@ -43,6 +53,7 @@
 
 ### 工程方法论（mattpocock, MIT）
 
+- `high-performance-code-review/` — 面向高性能 Python/PyTorch/CUDA/分布式系统的严格 P0-P4 code review；源自 sglang-diffusion-routing issue #32，并做了证据化与仓库上下文适配。
 - `diagnose/` — 通用 bug/回归诊断闭环（与 perf-* 互补）。
 - `tdd/` — 红-绿-重构 TDD。
 - `handoff/` — 长 session 交接文档。

@@ -1,6 +1,6 @@
 # Skills 使用指南
 
-本仓库共 **25 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **26 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
 
 ## 怎么触发
 
@@ -270,6 +270,18 @@ python3 scripts/layer_timeline_analyzer.py \
 
 ## 五、工程方法论
 
+### `high-performance-code-review`
+
+**干什么**：面向高性能 Python、PyTorch、CUDA 与分布式系统做严格 PR/code review。按 P0-P4 检查正确性、性能、可维护性、设计清晰度和验证流程，并要求每条 finding 给出具体证据、触发条件和修复方案。
+
+**示例**：
+```text
+@high-performance-code-review
+严格 review 这个 PR，重点检查 tensor shape、host-device sync、并发安全和测试完整性。
+```
+
+---
+
 ### `diagnose`
 
 **干什么**：**通用硬 bug / 性能回归** 诊断闭环——建 feedback loop → 复现 → 假设 → 插桩 → 修复 → 回归测试。和 `perf-*` 互补（更偏逻辑 bug、flaky、配置回归）。
@@ -427,6 +439,7 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 | 写 Triton kernel | `kernel-triton-writing` |
 | 写 CuTe/CUTLASS kernel | `kernel-cute-writing` |
 | 第一次进大仓库 | `codebase-onboarding` / `parallel-exploring` |
+| 严格 review 高性能代码 | `high-performance-code-review` |
 | 大改前先对齐方案 | `grill-with-docs` |
 | bug / 回归 | `diagnose` |
 | 写测试/脚本 | `tdd` |

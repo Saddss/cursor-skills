@@ -1,0 +1,81 @@
+# 真 vLLM 冷热池(最小忠实版)——替换 mock,验证 ingress-nginx 按 header 分流命中真 vLLM。
+# 热池: 带 SimpleCPUOffloadConnector KV offload(照 controller.py:466-467 热池配置)
+# 冷池: 无 offload。各 1 副本占 1 GPU。served-model-name 一致,ingress 只按 header 分流。
+# label 复用 app=hot-pool / app=cold-pool,现有 hot-svc/cold-svc 直接选中。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: hot-vllm, labels: { app: hot-pool } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hot-pool } }
+  template:
+    metadata: { labels: { app: hot-pool } }
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: vllm
+          image: ssadds/vllm:kaon-0.22-v1.4-kvevict
+          imagePullPolicy: IfNotPresent
+          command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
+                    "--host","0.0.0.0","--port","8080",
+                    "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
+                    "--max-model-len","8192","--max-num-seqs","64",
+                    "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.90",
+                    "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
+                    "--quantization","compressed-tensors","--enable-prefix-caching",
+                    "--speculative-config",
+                    "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
+                    "--kv-transfer-config",
+                    "{\"kv_connector\":\"SimpleCPUOffloadConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":21474836480}}",
+                    "--stream-interval","5","-O3"]
+          env:
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: VLLM_KV_EVICT_TRUNC, value: "1" }
+            - { name: VLLM_USE_SIMPLE_KV_OFFLOAD, value: "1" }
+          ports: [{ containerPort: 8080 }]
+          resources: { limits: { nvidia.com/gpu: 1 } }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 60
+          volumeMounts: [{ name: hf, mountPath: /root/.cache/huggingface }]
+      volumes: [{ name: hf, hostPath: { path: /home/sesterce/hf, type: Directory } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cold-vllm, labels: { app: cold-pool } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: cold-pool } }
+  template:
+    metadata: { labels: { app: cold-pool } }
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: vllm
+          image: ssadds/vllm:kaon-0.22-v1.4-kvevict
+          imagePullPolicy: IfNotPresent
+          command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
+                    "--host","0.0.0.0","--port","8080",
+                    "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
+                    "--max-model-len","8192","--max-num-seqs","64",
+                    "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.90",
+                    "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
+                    "--quantization","compressed-tensors","--enable-prefix-caching",
+                    "--speculative-config",
+                    "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
+                    "--stream-interval","5","-O3"]
+          env:
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: VLLM_KV_EVICT_TRUNC, value: "1" }
+          ports: [{ containerPort: 8080 }]
+          resources: { limits: { nvidia.com/gpu: 1 } }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 60
+          volumeMounts: [{ name: hf, mountPath: /root/.cache/huggingface }]
+      volumes: [{ name: hf, hostPath: { path: /home/sesterce/hf, type: Directory } }]

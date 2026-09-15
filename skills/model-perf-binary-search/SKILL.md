@@ -1,42 +1,146 @@
 ---
 name: model-perf-binary-search
-description: Find the maximum sustainable QPS of an LLM inference service that meets a p50 e2e latency SLO using online_replay.py and a binary search. Use when the user asks to "测最大 QPS"/"二分测性能"/"find max QPS"/"benchmark a model"/"perf test with SLO"/"调参测性能"/"在 X 基础上开启 Y 功能调优" against a local OpenAI-compatible server (e.g. vLLM, SGLang, TRT-LLM) and provides a startup command plus a QPS lower/upper bound. The skill is framework-agnostic, drives the user-supplied serving command, runs replay rounds (12 if no offload / 24 with offload), averages the per-round p50 over the last 6/12 rounds, compares against 6.5s by default, binary-searches QPS to 0.1 precision (extrapolating the upper bound when it still passes), reports progress every 15min (no offload) / 30min (offload), captures prefix-cache hit rate per probe in a framework-agnostic way (scrapes Prometheus /metrics and falls back to engine-specific log scraping or research when the standard endpoint does not expose prefix metrics), and optionally runs additional tuned-parameter sessions in two modes: Mode A (research every existing flag in the user's startup command against the official docs and the local GPU and propose better values), or Mode B (the user names a feature to enable but does not understand it; do a deep multi-stage investigation of that feature, tune the feature's own knobs, and co-adjust user-provided flags whose interactions are documented).
+description: >-
+  Find the maximum sustainable QPS of an LLM inference service that meets a
+  p50 e2e latency SLO using online_replay.py and a binary search. Use for
+  maximum-QPS benchmarks, SLO-based performance tests, and optional serving
+  configuration or feature tuning on local OpenAI-compatible servers.
 ---
 
 # Model Performance Binary Search
 
-Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives the `online_replay.py` script from `Saddss/llm-inference-benchmarking@sss-test` (carries the sampler / timeout / round-drain fixes; the upstream `FlowGPT/qq-test` is missing them and will not work against TRT-LLM or any saturated service) against a service that the user provides a startup command for, and binary-searches the QPS axis.
+Find the maximum QPS at which an LLM inference service still meets a p50 end-to-end latency SLO. This skill drives `online_replay.py` from `Saddss/llm-inference-benchmarking`. The default branch is `feat/replay-conversation-causality`, which preserves per-conversation request causality, sends continuously across reporting windows, and includes sequencer wait in client E2E latency. The legacy `sss-test` branch remains available when the user explicitly selects it.
 
-## Bootstrap (must run at session start, idempotent)
+## Scenario selection
 
-Before any probe, run the bundled bootstrap so the benchmarking workspace is guaranteed to exist:
+Keep the standard workflow as the default. When the user explicitly asks for
+AutoReply or asks whether to use its M12 production-shaped workload, offer the
+AutoReply scenario below as an additional choice. Enter it only after the user
+selects it for the current session. Otherwise, follow every existing standard
+dataset, bootstrap, input, sampling, and round-count rule unchanged.
+
+Do not infer the AutoReply scenario from a generic `n=3`, M12, or 2-second SLO
+request alone; those settings can occur in unrelated workloads.
+
+## Standard scenario: dataset selection and bootstrap (must run at session start)
+
+For every standard benchmark session:
+
+1. List the regular files under `/mnt/shared/sss/data`.
+2. Ask the user to choose exactly one dataset.
+3. Ask the user to choose a benchmark branch. Present `feat/replay-conversation-causality` first and mark it as the default/recommended choice; also offer legacy `sss-test`.
+
+Never reuse a previous session's choices or infer them silently. If the user says to use defaults, select `feat/replay-conversation-causality`, but the dataset must still be explicit.
+
+The maintained test datasets are:
+
+| Dataset | Model/workload | Replay selection |
+|---------|----------------|------------------|
+| `/mnt/shared/sss/data/kaon-v3-test.jsonl` | Kaon-V3, 150k time-window workload | `--sample-range 0 min(0.02*qps, 1.0)` |
+| `/mnt/shared/sss/data/gemma4-31b-test.jsonl` | Gemma-4-31B, 20k preselected canonical route | `--preselected-route`; never combine with `--sample-range` |
+
+Both maintained datasets should use the default branch with
+`--serialize-conversations --continuous-qps-window`. The Gemma dataset depends
+on `--preselected-route`; do not pair it with a branch that lacks that flag.
+After the user chooses:
 
 ```bash
-bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh
-```
-
-What it does (idempotent — re-running is cheap):
-- Clones `https://github.com/FlowGPT/llm-inference-benchmarking` (`qq-test` branch) into the workdir.
-- Installs `uv` (user-local) if missing, creates `$WORKDIR/.venv`, and `uv pip install -r requirements.txt`.
-- Symlinks the replay dataset from `/mnt/shared/qq/llm-inference-benchmarking/replay-logs-origin.log` into the workdir.
-- Creates `$WORKDIR/bench-runs/`.
-- **Runs `scripts/health_check.py`** (full GPU/PCIe/AER/pinned-BW preflight, see below) and writes the result to `$WORKDIR/.health_check.json`.
-
-Environment overrides (all optional):
-- `LLM_BENCH_DIR` — workdir (default `$HOME/llm-inference-benchmarking`).
-- `LLM_BENCH_REPO_URL`, `LLM_BENCH_REPO_BRANCH` — change repo / branch.
-- `LLM_BENCH_DATASET_SRC` — alternate dataset path (if the shared mount lives elsewhere on this machine).
-
-**The last line of bootstrap.sh's stdout is `WORKDIR=<absolute path>`. Capture it and export it as `LLM_BENCH_DIR` for the rest of the session.** Example:
-
-```bash
-eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh | tail -1)"
+export LLM_BENCH_DATASET_SRC="/mnt/shared/sss/data/<chosen-file>"
+export LLM_BENCH_REPO_BRANCH="feat/replay-conversation-causality"  # or sss-test
+eval "$(bash ~/.cursor/skills/model-perf-binary-search/scripts/bootstrap.sh)"
 export LLM_BENCH_DIR="$WORKDIR"
 ```
 
-`bootstrap.sh` always returns exit 0 on a successful setup (even when the health check reports problems); the agent must read `$LLM_BENCH_DIR/.health_check.json` to decide whether to proceed. If bootstrap itself exits non-zero, surface the stderr to the user verbatim and stop — almost always it means the shared dataset mount is missing or git can't reach GitHub.
+What it does (idempotent):
 
-All later commands in this skill assume `$LLM_BENCH_DIR` is set and points at a bootstrapped workdir with a `.venv/`, `online_replay.py`, and a real (or symlinked) `replay-logs-origin.log`.
+1. **Selection gate** — require one explicit `LLM_BENCH_DATASET_SRC` under `/mnt/shared/sss/data`. Missing mount, missing selection, empty files, and paths outside that directory fail immediately.
+2. **Clone or update** `https://github.com/Saddss/llm-inference-benchmarking.git` on the selected branch (default **`feat/replay-conversation-causality`**; fetch + checkout + `pull --ff-only` when the repo already exists).
+3. **Python env** — install `uv` if missing; create `$WORKDIR/.venv`; run `uv pip install -r requirements.txt` and `uv pip install requests`.
+4. **Dataset** — copy only the selected file to `$WORKDIR/datasets/<basename>`. Reuse a non-empty local file with that basename; never bulk-copy the shared directory.
+5. Create `$WORKDIR/bench-runs/`.
+6. Run `scripts/health_check.py` → `$WORKDIR/.health_check.json`.
+
+Environment overrides (optional):
+
+| Variable | Default |
+|----------|---------|
+| `LLM_BENCH_DIR` | `$HOME/llm-inference-benchmarking` |
+| `LLM_BENCH_REPO_URL` | `https://github.com/Saddss/llm-inference-benchmarking.git` |
+| `LLM_BENCH_REPO_BRANCH` | `feat/replay-conversation-causality` |
+| `LLM_BENCH_SHARED_MOUNT` | `/mnt/shared/sss` |
+| `LLM_BENCH_DATASET_SRC` | Required selected file under `<mount>/data` |
+
+Bootstrap stdout contains shell-safe `WORKDIR=<absolute path>` and `DATASET=<local selected path>` assignments. Capture both with the command above.
+
+Bootstrap returns exit 0 when setup succeeded (even if health check reports warnings). Read `$LLM_BENCH_DIR/.health_check.json` for `exit` semantics. Bootstrap exits non-zero only on hard failures (no mount, no dataset file, git/uv/import errors).
+
+All later commands assume `$LLM_BENCH_DIR` has `.venv/` and `online_replay.py`, and use `$DATASET` as the replay input.
+
+## AutoReply M12 production scenario
+
+This is an opt-in alternative to the standard scenario, not a change to it.
+Use it only when the user explicitly selects AutoReply for the current session.
+Its preselected production-shaped route replaces the standard dataset/bootstrap,
+sampling, and round-count defaults only inside that selected session.
+
+- Worktree: `/root/llm-inference-benchmarking` on
+  `feat/replay-conversation-causality`. If it already has local changes, **do
+  not run bootstrap** and do not checkout `sss-test`.
+- Build and verify:
+  `scripts/build_autoreply_prod_datasets.py`, then
+  `scripts/verify_autoreply_dataset.py`. The canonical files are
+  `datasets/autoreply_prod_dist_1000.jsonl` (exactly 1000 rows) and
+  `datasets/autoreply_prod_boundary_300.jsonl` (at least 300 rows). The verify
+  report is `datasets/autoreply_prod_verify.json`.
+- The 1000-row token quotas are: `<1k=37`, `1k-2k=108`, `2k-3k=108`,
+  `3k-3.5k=77`, `3.5k-3.8k=283`, `3.8k-4k=373`, `4k-4095=9`,
+  `4096-8k=5`. Boundary coverage includes the 3743 trim edge, fixed-prompt
+  4k-6k/6k-8k/8100-8142 tails, long personality, 50/51 turns, same-role merge,
+  long single messages, multilingual, and direct/V4 async entry points.
+- Always use `--preselected-route`; never combine this route with
+  `--sample-range`. Use `--serialize-conversations
+  --continuous-qps-window`. A 12-round continuous run needs enough input rows;
+  build `datasets/autoreply_prod_dist_repeated_13x.jsonl` with
+  `scripts/build_autoreply_repeated_route.py` and use it for probes. It repeats
+  complete shuffled 1000-row cycles; do not replay a bucket-grouped file or a
+  1000-row file that exhausts before `qps * 360s`.
+- Request parameters are fixed:
+  `--max-tokens 50 --temperature 0.7 --top-p 0.8
+  --frequency-penalty 0.01 --presence-penalty 0.01 --disable-min-p
+  --extra-body-json '{"n":3,"stop":["<|im_end|>"],"top_k":-1}'`.
+  Do not send the generic `top_k=40`, `min_p=0.1`, or `max_tokens=200`.
+- **TensorRT-LLM opt-in compatibility path:** only when the selected server is
+  TensorRT-LLM and its live OpenAI schema/defaults have been verified, represent
+  disabled top-k canonically as Python `top_k=None`, then omit that None-valued
+  static `extra_body` key before JSON serialization. TensorRT-LLM 1.2.1 defaults
+  an omitted `top_k` to `0`, which disables top-k. Literal JSON `"top_k": null`
+  is not omission and fails integer validation; `top_k=-1` also fails. Record
+  all three wire probes before benchmarking. Keep `n`, stop, max tokens,
+  temperature, top-p, penalties, and disabled min-p unchanged. Do not use this
+  adapter for vLLM or standard scenarios; their existing request paths remain
+  unchanged.
+- `n=3` means **one HTTP request = one QPS unit = three completions**. Never
+  multiply or divide the benchmark's target HTTP QPS by three. When comparing
+  against an engine-side completion/sequence-rate metric, explicitly label the
+  conversion (`HTTP QPS * 3`) instead of treating the two metrics as the same
+  unit. Verify once with non-streaming `len(choices)==3` and streaming choice
+  indices `0,1,2`.
+- Production prefix-cache token hit rate is about **66%-67%**. Snapshot
+  `/metrics` before/after every probe and diff
+  `vllm:prefix_cache_hits_total / vllm:prefix_cache_queries_total`. A material
+  mismatch invalidates alignment: check `n=3`, cross-request duplicate prefix
+  blocks, route ordering, and cache eviction before accepting QPS results.
+- Start `scripts/launch_autoreply_m12_prod.sh`; container name is
+  `autoreply-m12-prod`, image is `vllm/vllm-openai:v0.27.1`, and the Docker
+  command must set `--entrypoint python3`. Do not touch other containers.
+- Baseline method: offload=OFF, SLO strictly `<2.0s`, precision `0.1`,
+  `--round-duration 30 --max-rounds 12`, analyzer `--tail-window 6
+  --auto-steady`. Probe LOW before HIGH; the historical production anchor is
+  about 28 QPS, but its HTTP-vs-engine metric layer must be confirmed and it is
+  not a reason to skip safe lower probes.
+- The full construction rationale and constraints are in
+  `/root/HANDOFF-autoreply-prod-bench.md`. Do not commit or push skill changes
+  unless the user explicitly asks.
 
 ## Pre-flight health check (gates offload runs)
 
@@ -69,23 +173,25 @@ When `exit >= 1`, **paste the relevant `issues_red` / `issues_warn` strings verb
 
 The Python file is portable — invoke it with whichever python has `torch` installed. The script gracefully degrades when torch is missing (skips the BW measurement and warns about it instead of failing).
 
-## Required inputs (ask the user up-front, in one message)
+## Standard scenario: required inputs (ask the user up-front, in one message)
 
-1. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
-2. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
-3. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
-   - `offload = OFF` -> run **12 rounds**, average **last 6** rounds' p50.
-   - `offload = ON`  -> run **24 rounds**, average **last 12** rounds' p50.
-4. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
-5. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
-6. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
+1. **Benchmark branch** — ask the user to choose `feat/replay-conversation-causality` (default/recommended) or legacy `sss-test`.
+2. **Replay dataset** — list `/mnt/shared/sss/data` and ask the user to choose one, even when only one file exists.
+3. **Service startup command** (full shell command, including port). This is opaque to the skill - just run it as given.
+4. **Binary search bounds** as `LOW HIGH` (floats, e.g. `3 6`).
+5. **Whether offload is enabled** for this run. Ask explicitly every time - do **not** infer it from the startup command. This decides the round counts:
+   - `offload = OFF` -> run **8 rounds**, average **last 4** rounds' p50.
+   - `offload = ON`  -> run **16 rounds**, average **last 8** rounds' p50.
+6. **Model name** to pass to `--model` (the same string the server uses for `served-model-name`).
+7. **API base port** (the `localhost` port the server listens on, e.g. `8080`).
+8. **Whether to also run a tuning round** after the baseline. If yes, ask whether it is:
    - **Mode A (generic tuning)**: "review my command and propose better values for what is already there"; or
    - **Mode B (feature enablement)**: "在 X 基础上开启 Y 功能, 你去调优性能" — i.e. the user names a specific feature/knob they want enabled but does not necessarily understand it themselves. Mode B triggers a deep, multi-stage investigation (see "Feature-enablement tuning" below) and is more expensive in wall-clock time, so make sure the user knows that.
-7. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`), input log path (default `$LLM_BENCH_DIR/replay-logs-origin.log`, resolved by bootstrap.sh).
+9. **Optional overrides**: SLO seconds (default `6.5`), precision (default `0.1`). Do **not** ask the user for repo clone, venv, or a path outside the shared-dataset choice unless bootstrap failed.
 
 If any of the above are missing, ask the user before starting.
 
-## Parameter-tuning round (only if the user opted in at input #6)
+## Parameter-tuning round (only if the user opted in at input #7)
 
 The goal: produce one or more **extra** complete binary-search sessions with tuned startup commands, so the user can compare baseline vs tuned max QPS. Order of operations: baseline run with the user's original command first, then propose tuning, then run the additional binary search(es). Steps 1–7 below cover **Mode A**; for **Mode B** layer the "Feature-enablement tuning" section on top of them.
 
@@ -182,12 +288,28 @@ Mode B never auto-extends into territory the user did not approve. Whenever you 
 
 ## Working directory and fixed conventions
 
-- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py` (the `--input` is a relative path).
-- Always invoke Python through the workdir's venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`. Do **not** rely on the system `python3` — its dependencies may differ.
-- Sample range is **always** `0.0 (0.02 * target_qps)`, capped at `1.0`. For `target_qps = 5` -> `0.0 0.1`; for `25` -> `0.0 0.5`; for `60` -> `0.0 1.0`.
-- `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or whatever override).
-- Use `--json-output` so we can compute the average of per-round `Latency.p50` precisely.
-- Pin `--max-rounds` to `12` or `24` so each test self-terminates.
+- Always `cd "$LLM_BENCH_DIR"` before running `online_replay.py`; pass `--input "$DATASET"`.
+- Always invoke Python through the workdir venv: `"$LLM_BENCH_DIR/.venv/bin/python" online_replay.py …`.
+- On `feat/replay-conversation-causality`, always add
+  `--serialize-conversations --continuous-qps-window`. This keeps each
+  conversation causal while allowing different conversations to overlap,
+  avoids artificial per-round drain gaps, and counts sequencing wait in E2E.
+- Dataset selection mode is exclusive:
+  - `kaon-v3-test.jsonl`: use `--sample-range 0.0 (0.02 * target_qps)`,
+    capped at `1.0`.
+  - `gemma4-31b-test.jsonl`: use `--preselected-route` and omit
+    `--sample-range`; every row already belongs to the canonical route.
+  - For any other dataset, inspect its provenance before choosing one mode.
+- `--round-duration 30`, `--replay-mode qps`, `--use-chat`, `--e2e-slo 6.5` (or override).
+- Production sampling (dataset has no per-request fields): `--max-tokens 200 --temperature 0.7` (plus `top_p` / penalties via CLI or `online_replay` prod defaults when omitted).
+- Use `--json-output` for per-round metrics.
+- Pin `--max-rounds` to `8` or `16`.
+
+### Truncation-aware datasets and MTP
+
+- `online_replay.py` always sends `X-Flow-Conversation-Id`; no extra flag is needed.
+- A dataset's `body.enable_kv_evict` is ignored by default. Add `--forward-kv-evict` only when the user explicitly requests truncation-eviction testing.
+- For MTP runs add `--disable-min-p` and do not pass `--min-p`; the MTP endpoint rejects it. Other runs, including non-MTP speculative decoding, retain production `min_p=0.1`.
 
 ## Service lifecycle
 
@@ -228,7 +350,7 @@ Implementation:
   - elapsed wall-clock time since session start, plus elapsed since last update;
   - probes completed so far (count + the same per-step table from the "Reporting to the user" section, truncated to last 5 rows if long);
   - the current binary-search bracket `[LOW, HIGH]` and `best_pass`;
-  - what is happening **right now** (e.g. "probe 7 at qps=9.4: round 8/12, last per-round p50 = 5.91s") - read it from the most recently appended line of the active shard's `--json-output` file;
+  - what is happening **right now** (e.g. "probe 7 at qps=9.4: round 6/8, last per-round p50 = 5.91s") - read it from the most recently appended line of the active shard's `--json-output` file;
   - rough ETA for the current probe (`(total_rounds - rounds_seen) * 30s`) and a coarse ETA for the whole session if the bracket width and average per-probe wall time make it estimable;
   - one line confirming the service PID is still alive (`kill -0 {pid}` works) and the latest few stderr lines if anything looks off.
 
@@ -238,27 +360,34 @@ Do **not** wait for an update window to also surface real failures (server crash
 
 Each binary-search step is one probe at a candidate QPS `q` (always rounded to the nearest 0.1). Procedure:
 
-1. Compute `sample_end = min(0.02 * q, 1.0)`.
-2. Pick `total_rounds` and `tail_window` from the offload flag (12/6 or 24/12).
+1. Select the dataset execution mode. For a hash-sampled dataset compute
+   `sample_end = min(0.02 * q, 1.0)`. For a preselected canonical route, use
+   the complete route and do not compute or pass a sample range.
+2. Pick `total_rounds` and `tail_window` from the offload flag (8/4 or 16/8).
 3. Choose output paths: `bench-runs/qps_{q}_{timestamp}.jsonl` for client metrics, plus `bench-runs/qps_{q}_{timestamp}.{before,after}.prom` for prefix-cache snapshots.
 4. **Snapshot the engine's `/metrics` endpoint** before any traffic is sent (see "Prefix cache hit rate" below). If that step returns `NO_PREFIX_METRICS` or the endpoint is unreachable, follow the fallback flow described there.
-5. Run **one** `online_replay.py` process for `q <= 10`. For `q > 10`, shard the load across `n = ceil(q / 10)` parallel processes, each with `--target-qps {q/n}` and a `--sample-range` chunk of width `sample_end / n` (so the union covers `[0, sample_end)`). Each shard writes to its own json file.
-6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 12/24 rounds.
+5. Run **one** `online_replay.py` process for `q <= 10`. Hash-sampled
+   datasets may be sharded above 10 QPS across
+   `n = ceil(q / 10)` processes, each with `--target-qps {q/n}` and a
+   non-overlapping sample-range chunk. Do not range-shard a preselected route;
+   use one process unless the selected branch provides an explicit
+   route-sharding mechanism.
+6. Wait for **all** shards to exit. Do not early-stop; the user requires the full 8/16 rounds.
 7. **Snapshot `/metrics` again** immediately after the last shard exits, then run the prefix-cache diff helper. Cache the resulting `hit_rate` for the per-probe report.
 8. Decide PASS/FAIL with the bundled helper. **Always pass `--auto-steady`** unless the user explicitly asks for the legacy tail-only behavior:
 
 ```bash
 python3 ~/.cursor/skills/model-perf-binary-search/scripts/analyze_rounds.py \
     --json bench-runs/qps_{q}_{ts}_shard*.jsonl \
-    --total-rounds {12 or 24} \
-    --tail-window {6 or 12} \
+    --total-rounds {8 or 16} \
+    --tail-window {4 or 8} \
     --slo {SLO} \
     --auto-steady
 ```
 
 The helper prints a single JSON line and exits `0=PASS / 1=FAIL / 2=NOT_ENOUGH_ROUNDS`.
 
-**How `--auto-steady` decides PASS/FAIL.** The fixed tail window is sensitive to cold-start backlog: on real chat workloads the first 5-7 rounds at any QPS show large p50 (queue drains slowly), and a fixed `tail-6` slice often still contains 1-2 of those backlog rounds, dragging the average above SLO when the engine has actually reached a steady-state below SLO. The auto-steady algorithm walks backward from the last round, including a round in the steady window if its p50 is within `±0.30` of the running median; it stops at the first round that's too far off. If the resulting window has at least 3 rounds, its average becomes the **primary** PASS/FAIL signal. If not (engine never reached steady state, or noisy variance), it falls back to the tail-window average and emits a note. Tunable knobs: `--steady-tolerance 0.30` (default), `--steady-min-window 3` (default).
+**How `--auto-steady` decides PASS/FAIL.** The fixed tail window is sensitive to cold-start backlog: on real chat workloads the first 5-7 rounds at any QPS can show large p50 while the queue drains, so an 8-round run with a fixed `tail-4` may still include warmup rounds. The auto-steady algorithm walks backward from the last round, including a round in the steady window if its p50 is within `±0.30` of the running median; it stops at the first round that's too far off. If the resulting window has at least 3 rounds, its average becomes the **primary** PASS/FAIL signal. If not (engine never reached steady state, or noisy variance), it falls back to the tail-window average and emits a note. Tunable knobs: `--steady-tolerance 0.30` (default), `--steady-min-window 3` (default).
 
 The helper also always emits a `warmup_dominated` boolean (true when `tail-N / tail-3 > 1.5` or `tail-N / last_round > 2.0`) so the agent can call out runs where the legacy tail metric would have been misleading.
 
@@ -271,17 +400,39 @@ Example shard command (single-process case):
 ```bash
 cd "$LLM_BENCH_DIR" && \
 "$LLM_BENCH_DIR/.venv/bin/python" online_replay.py \
-    --input replay-logs-origin.log \
-    --replay-mode qps --target-qps 5 \
-    --sample-range 0.0 0.1 \
+    --input "$DATASET" \
+    --preload-time 2 \
+    --replay-mode qps --target-qps 5.1 \
+    --sample-range 0.0 0.102 \
+    --serialize-conversations \
+    --continuous-qps-window \
     --api-base http://localhost:8080/v1 \
+    --api-key "$(printf 'a%.0s' {1..32})" \
     --model your-model-name \
     --use-chat \
+    --max-tokens 200 \
+    --temperature 0.7 \
+    --top-p 0.85 \
+    --top-k 40 \
+    --min-p 0.1 \
+    --frequency-penalty 0.4 \
+    --presence-penalty 0.1 \
     --round-duration 30 \
-    --max-rounds 12 \
+    --round-drain-timeout 300 \
+    --request-timeout 600 \
+    --max-rounds 8 \
     --e2e-slo 6.5 \
-    --json-output bench-runs/qps_5.0_20260101_120000.jsonl
+    --json-output bench-runs/qps_5.1_20260101_120000.jsonl
 ```
+
+For `gemma4-31b-test.jsonl`, replace the `--sample-range` line with
+`--preselected-route`. Never pass both. On the legacy `sss-test` branch, omit
+the two causality flags only when the user explicitly chose legacy behavior.
+
+For the default branch, record `wire_dispatch_qps`, `completion_qps`,
+`Server Latency`, and `Sequencer Wait` when present. Use client E2E latency for
+the SLO decision; server latency alone excludes client scheduling and
+conversation sequencing delay.
 
 ### Prefix cache hit rate (per-probe, framework-agnostic)
 
@@ -322,12 +473,14 @@ Always include the chosen `hit_metric` / `denom_metric` names in the final repor
 
 Notation: `LOW`, `HIGH` are floats. `precision = 0.1` by default. `best_pass = None`.
 
-1. **Probe HIGH first.**
+**Always probe LOW before HIGH.** Starting at a too-high QPS (especially with CPU KV offload or a cold engine) commonly creates irreversible queue backlog / ReadTimeout storms that waste the whole probe window and contaminate the service for later steps. Establish a passing floor first, then climb.
+
+1. **Probe LOW first.**
+   - If `LOW` FAILs, **extrapolate downward** symmetrically (halve the gap toward 0) until you find a passing QPS or you reach the precision floor. If even a very low QPS fails, report the failure to the user with the per-round p50 values — the service likely has a problem unrelated to capacity; do **not** proceed to HIGH.
+   - If `LOW` PASSes, set `best_pass = LOW` and continue.
+2. **Probe HIGH.**
    - If `HIGH` PASSes, `best_pass = HIGH`, then **extrapolate upward** (see below) and repeat until the new HIGH FAILs. The user explicitly does not want you to stop at the user-provided HIGH if it still passes.
-   - If `HIGH` FAILs, keep `HIGH` and continue.
-2. **Probe LOW.**
-   - If `LOW` FAILs, **extrapolate downward** symmetrically (halve the gap toward 0) until you find a passing QPS or you reach the precision floor. If even a very low QPS fails, report the failure to the user with the per-round p50 values - the service likely has a problem unrelated to capacity.
-   - If `LOW` PASSes, set `best_pass = max(best_pass, LOW)`.
+   - If `HIGH` FAILs, keep `HIGH` as the failing upper bound and continue.
 3. **Standard binary search between the latest passing low and failing high.**
    - Loop while `HIGH - LOW > precision`:
      - `mid = round((LOW + HIGH) / 2, 1)` (always step on a 0.1 grid).
@@ -344,7 +497,7 @@ You decide the next upper bound based on the SLO margin at the current HIGH. Use
   - `slack >= 0.40` (very comfortable, e.g. p ~3.5s vs 6.5s) -> aggressive jump: `new_high = round(H * 1.6, 1)` (cap at `H + 8`).
   - `0.20 <= slack < 0.40` -> moderate: `new_high = round(H * 1.3, 1)`.
   - `0.05 <= slack < 0.20` -> small: `new_high = round(H + max(1.0, 0.15 * H), 1)`.
-  - `slack < 0.05` -> the next probe would likely fail; stop extrapolating, keep `H` as the new search HIGH and proceed to step 2 with `LOW` unchanged.
+  - `slack < 0.05` -> the next probe would likely fail; stop extrapolating, keep `H` as the confirmed PASS / search low, and treat the next untested point above as the failing candidate only after an actual FAIL probe (or enter binary search once a FAIL bound exists).
 
 Always set `new_low = H` (the previous HIGH became a confirmed PASS, so the search interval starts there). Then re-probe `new_high`; if it also passes, recompute and extrapolate again.
 
@@ -356,13 +509,16 @@ Mirror logic: let `p` be the avg-p50 at current LOW `L`. Pick `new_low = round(L
 
 - "Meets SLO" means the **average of per-round p50 e2e latencies** over the tail window is **strictly less than** the SLO (default `6.5s`). A round whose own p50 is over SLO does **not** by itself fail the QPS - only the tail-window average matters.
 - Precision `0.1` means the final answer is reported to one decimal place. If the user says "精确到 0.5" or "整数即可", use that as the precision instead.
-- All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** when monotonically rising per-round p50 (e.g. every round 1.3× or more than the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup), the probe is producing only growing-queue artifacts and not useful steady-state numbers. In that case `pkill -f online_replay.py`, write a row with `Result=FAIL`, `Notes="queue runaway, killed at round X / Y, last p50 = Zs"`, set `hit_rate=n/a`, and proceed with the bisect. Document the exception in the final report so the user knows which probes were early-stopped.
+- All probes that the binary search needs to make must run to completion (no early stop), per user policy. **Single exception — "obvious-FAIL queue runaway":** kill the probe early (`pkill -f online_replay.py`), write `Result=FAIL`, `hit_rate=n/a`, and proceed with the bisect when **either**:
+  1. per-round p50 is monotonically rising (e.g. every round ≥1.3× the prior) **and** the most recent round's p50 is already >10× SLO **and** the engine is in steady saturation (no transient warmup); or
+  2. the client is in a ReadTimeout / drain-timeout storm — e.g. ≥2 consecutive rounds that report zero successful requests after drain timeout, or ≥50 ReadTimeouts in the shard stderr while fewer than 3 metric rounds have been written — which typically follows starting too high (another reason LOW is probed first).
+  Document the exception in the final report so the user knows which probes were early-stopped.
 
 ### Warmup-bias caveat (handled by `--auto-steady`; still disclose in report)
 
-The fixed tail-N window is sensitive to **cold-start backlog**: under realistic chat replay, round 1 typically produces 50–100s p50 (initial burst of in-flight requests draining through the engine's queues), and it takes ~5–7 rounds for the queue to fully reach steady state. With `tail-6` of 12, the first 1–2 tail rounds are often still draining warmup and pull the average above the engine's steady-state p50.
+The fixed tail-N window is sensitive to **cold-start backlog**: under realistic chat replay, round 1 can produce 50–100s p50 and it can take ~5–7 rounds for the queue to reach steady state. With the 8-round no-offload policy, `tail-4` can therefore still contain warmup. The auto-steady result and `warmup_dominated` flag must remain visible in the report.
 
-Concrete pattern from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 15, 38, 16, 4.4, 4.8, 5.2, 5.1, 4.9]`. tail-6 = 6.71s → FAIL. But rounds 8–12 are clearly steady at ~4.9s. The legacy tail-only judgement reports a max QPS that **underestimates true sustainable QPS by ~10–20%**.
+Historical 12-round example from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 15, 38, 16, 4.4, 4.8, 5.2, 5.1, 4.9]`. tail-6 = 6.71s → FAIL. But rounds 8–12 are clearly steady at ~4.9s. The legacy tail-only judgement reports a max QPS that **underestimates true sustainable QPS by ~10–20%**.
 
 **`--auto-steady` (recommended default) automatically detects and uses the steady window.** It identified the [4.4, 4.8, 5.2, 5.1, 4.9] tail above as a 5-round steady window at 4.89s, flipping the verdict to PASS — matching the engine's actual sustained capacity.
 
@@ -370,7 +526,7 @@ Concrete pattern from a real vLLM run at q=4.1: per-round p50 `[72, 33, 33, 16, 
 
 - Show both the primary metric (steady avg, when detected) and the legacy tail-N avg in the per-probe table.
 - If `warmup_dominated == true` in the analyzer JSON, paste the helper's `notes[]` string verbatim in the final report. It signals the legacy tail metric would have been misleading.
-- If a bisect step PASSes via steady but `warmup_dominated == true`, optionally suggest the user re-run that QPS with `--round-duration 60` or `--max-rounds 24` to confirm. Do **not** silently change those values — they are part of the published methodology.
+- If a bisect step PASSes via steady but `warmup_dominated == true`, optionally suggest the user re-run that QPS with `--round-duration 60` or `--max-rounds 16` to confirm. Do **not** silently change those values — they are part of the published methodology.
 
 **When `--auto-steady` falls back to tail-N** (no ≥3-round window within ±30% of running median): the engine genuinely never reached steady state at this QPS. Report the tail-N number and the `notes` line saying "no steady window detected"; this is a legitimate FAIL signal (or, if `tail-N` itself is far above SLO, a clear overload signal).
 
@@ -382,9 +538,9 @@ Track every probe and present the result clearly when done. Use a markdown table
 |------|-----|--------|----------------------|------------|------------------|-------|
 | 1 | 6.0 | PASS | 4.81s (steady-5) | 5.20s | 31.2% | extrapolating up |
 | 2 | 9.0 | PASS | 5.92s (steady-4) | 6.41s | 28.7% | warmup-dominated; extrapolating |
-| 3 | 12.0 | FAIL | 7.40s (tail-6, no steady) | 7.40s | 24.1% | engine never reached steady |
+| 3 | 12.0 | FAIL | 7.40s (tail-4, no steady) | 7.40s | 24.1% | engine never reached steady |
 | 4 | 10.0 | PASS | 6.11s (steady-5) | 6.30s | 27.4% | |
-| 5 | 11.0 | FAIL | 6.84s (steady-3) | 7.10s | 25.8% | thin steady evidence; suggest re-run with --max-rounds 24 |
+| 5 | 11.0 | FAIL | 6.84s (steady-3) | 7.10s | 25.8% | thin steady evidence; suggest re-run with --max-rounds 16 |
 | ... | ... | ... | ... | ... | ... | converged |
 
 - **Primary p50** is the official PASS/FAIL signal (output of `--auto-steady`). It's either the auto-detected steady-window average (preferred) or the tail-N average (fallback). Always show which window was used in parentheses: `(steady-N)` or `(tail-N, no steady)`.
@@ -392,7 +548,7 @@ Track every probe and present the result clearly when done. Use a markdown table
 - When `warmup_dominated == true` in the analyzer JSON, paste its `notes[]` string in the per-probe `Notes` cell so the user sees why the two columns may diverge.
 - Render `Prefix cache hit` as a percentage with one decimal. If the value is missing for a probe (e.g. `/metrics` unreachable, `NO_PREFIX_METRICS`, or fallback failed), show `n/a` and add a one-line footer explaining why.
 
-Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={12 or 24}, tail={6 or 12})`.
+Final line: `Max QPS meeting p50 e2e <{SLO}s SLO: {best_pass} (offload={ON|OFF}, rounds={8 or 16}, tail={4 or 8})`.
 
 Also print, in the final report:
 
@@ -416,8 +572,35 @@ When the user asks for CPU KV offload (vLLM's `--kv-offloading-size N --kv-offlo
 
 Confirm these from the startup logs: the engine prints `[gpu_worker.py:NNN] Allocating M CPU tensors...` lines while pinning. Watch `free -h available` drop by `offload_size / M` per line. If it stalls or the container exits, this is the cause.
 
+## Automation robustness (multi-hour unattended sweeps)
+
+When you script a long unattended sweep (many configs × binary search, hours of wall-clock, no human watching), the binary search itself is the easy part — the orchestration around it is where nights get wasted. These are hard-won rules; each one comes from a real overnight failure that silently burned hours or produced fake data. The overarching principle: **a probe/deployment failure must degrade to a correct verdict, never to fake data or a silent hang.**
+
+1. **Never judge liveness with a single short-timeout health poll.** A saturated-but-alive server is slow to answer `/v1/models` (or `/health`); a 5 s `curl` then times out and you wrongly conclude "server died mid-probe." Retry with a generous timeout (e.g. 20 s × 3) before declaring death, or check the container/process is still up (`docker ps`) as the primary signal. This false-DEAD bites hardest on single-worker tests where one server bears the full load; multi-worker/router setups mask it. If a probe reports a death, confirm the server is actually gone (`docker ps`, direct `curl` with long timeout) before trusting it.
+
+2. **Distinguish "deployment is dead" from "this QPS is too high."** A server that OOM-dies *under load* (GPU VRAM exhausted at high QPS — exit code 137) means *that QPS is too high*, i.e. a **FAIL to bisect below**, not a dead test. If your bisect treats every death as a fatal DIED, retrying the same config just OOMs again and you lose the test. Instead: if the server died mid-probe **and lower QPS have passed**, relaunch it and treat this probe as FAIL (search downward). Only a death **before any PASS** (won't even start) is a true DIED.
+
+3. **`pgrep -f <name>` matches your own observers.** A guard like `while pgrep -f run_x.sh; do sleep; done` will match your monitor scripts, editor, and even the grep — and never exit, hanging the whole run forever. Match container/PID precisely (`ps -eo comm`, exact PID, `docker ps --filter name=^x$`), never `pgrep -f` on a substring that your own tooling also contains.
+
+4. **Globals set inside `$(...)` are lost.** `name=$(launch_and_set_globals)` runs in a subshell; any `LAUNCH_OK=1` it sets is invisible to the caller, so every launch looks failed. Call such functions directly and read globals, or return status via exit code / stdout only.
+
+5. **`n=$(grep -c ... || echo 0)` can hold a newline** ("0\n0"), which then breaks `[ "$n" -ge 10 ]` with `integer expression expected`. Sanitize numeric captures: `n=$(echo "$n" | tr -dc '0-9'); n=${n:-0}`.
+
+6. **Per-test timeout must fit the SLOWEST test, not the median.** Offload runs (2.5 s/GB pinning) with more rounds and upward-extrapolating bounds can take 3-4× a plain run. A cap tuned to the fast case kills the slow ones as false timeouts right when they were converging. Size the hard cap to the worst case (offload + max rounds + full extrapolation), and on timeout recover the partial answer from the probe log (the last PASS/FAIL bracket usually pins it) rather than discarding.
+
+7. **Set the bisect upper bound from the actual deployment, not a habit.** A fixed cap (e.g. 2.0) that's fine for one card is far below a router fronting N cards (ceiling ~N × single-card). Every test then reports "≥2.0" and the sweep is worthless. Always extrapolate the upper bound upward while it still PASSes, with a sane ceiling.
+
+8. **Reuse deployments across tests that share a launch config.** If 3 tests differ only in router policy or a client flag (not the vLLM launch args), start the workers once and run all 3 — don't `stop_all + relaunch` (full recompile) per test. Launch workers in parallel (fire all, then wait-all-ready) so wall time ≈ one compile, not N.
+
+9. **Make the sweep resumable and non-destructive.** Append results to a file; on (re)start, **skip any test that already has a non-DIED result** rather than truncating and re-running everything. A mid-sweep fix or card-count change then costs only the unfinished tests, not the night.
+
+10. **On a shared machine, scan for free resources at launch and never touch others'.** Compute the usable GPU set at runtime (VRAM < threshold, excluding known-bad indices), pin only those, and only ever `docker rm` your own named containers. A co-tenant's job can appear or vanish mid-sweep; a static card list or a blanket `docker rm` will collide.
+
+11. **Verify a `RESULT`/completion signal against the file of record before trusting it.** A monitor tailing a log can read a mid-probe line or a stale value and report a completion that didn't happen. Confirm from the authoritative results file (line count / grep) before acting on "done."
+
 ## Helper scripts
 
 - `scripts/analyze_rounds.py` parses one or more JSON-lines files produced by `--json-output`, averages per-round `Latency.p50` (across shards if multiple files are given), and emits PASS/FAIL/NOT_ENOUGH_ROUNDS via exit code. Two metrics are always computed: (a) the legacy tail-N average, (b) an auto-detected steady-window average (backward walk with `±0.30` of running median, minimum 3 rounds). When invoked with `--auto-steady` (recommended default in the probe procedure), the steady metric becomes the primary PASS/FAIL signal with tail-N as fallback. Without the flag, behavior is byte-identical to the v1 tail-only algorithm. Also emits a `warmup_dominated` boolean and human-readable `notes[]` for downstream reporting. Read its top docstring for full details.
 - `scripts/prefix_cache_hit_rate.py` snapshots a Prometheus `/metrics` endpoint and computes prefix-cache hit rate between two snapshots. Two subcommands: `snapshot --url … --out …` and `diff --before … --after …`. Framework-agnostic: discovers prefix-cache metric names by heuristic (any name containing "prefix" + hit-like / query-like keywords; falls back to hits+misses pair). Exit codes: `0` OK, `2` NO_PREFIX_METRICS (no prefix metrics on endpoint — caller should fall back to log scraping or engine docs), `3` error. Read its top docstring for full details.
-- `scripts/smoke.sh` runs `analyze_rounds.py` and `prefix_cache_hit_rate.py` against bundled `scripts/fixtures/` files and checks both exit code and a key substring in the JSON output (PASS/FAIL/NOT_ENOUGH_ROUNDS, prefix-cache hit_rate, NO_PREFIX_METRICS). Use this after editing either helper to catch obvious regressions — cheap, no network, no GPU. Exits non-zero with a count if any check fails.
+- `scripts/prepare_dataset.sh` validates one explicitly selected shared dataset and atomically stages only that file under `$WORKDIR/datasets/`. It rejects missing, empty, out-of-directory, relative, and unsafe local targets.
+- `scripts/smoke.sh` validates round analysis, prefix-cache metrics, and selected-dataset staging (including failure and symlink boundaries). Run it after editing any bundled helper; it needs no network, live engine, or GPU.

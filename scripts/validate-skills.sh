@@ -3,7 +3,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SKILLS_DIR="${ROOT}/skills"
 errors=0
+
+if [[ ! -d "$SKILLS_DIR" ]]; then
+  echo "FAIL: missing skills directory: $SKILLS_DIR" >&2
+  exit 1
+fi
 
 while IFS= read -r -d '' skill; do
   dir="$(dirname "$skill")"
@@ -54,7 +60,7 @@ while IFS= read -r -d '' skill; do
   done < <(grep -oE '\[[^]]+\]\([^)]+\)' "$skill" | sed -n 's/.*(\([^)]*\)).*/\1/p')
 
   echo "OK   $name ($lines lines)"
-done < <(find "$ROOT" -mindepth 2 -maxdepth 2 -name SKILL.md -print0 | sort -z)
+done < <(find "$SKILLS_DIR" -mindepth 2 -maxdepth 2 -name SKILL.md -print0 | sort -z)
 
 if [[ "$errors" -gt 0 ]]; then
   echo "---"

@@ -1,0 +1,94 @@
+# 冷热池 mock 后端 —— 复刻 controller.py 的分离拓扑,但用轻量 nginx 代替真 vllm。
+# 每个后端返回一段 JSON,标明自己属于哪个池、是哪个 Pod,用于验证 header 分流命中。
+# hot-pool: 1 副本(对应热池 cache_aware router 后的 worker)
+# cold-pool: 2 副本(对应冷池多 worker 轮询)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hot-content
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location / {
+        default_type application/json;
+        add_header X-Pool hot always;
+        return 200 '{"pool":"hot","pod":"$hostname","note":"cache-aware hot backend"}\n';
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cold-content
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location / {
+        default_type application/json;
+        add_header X-Pool cold always;
+        return 200 '{"pool":"cold","pod":"$hostname","note":"round-robin cold backend"}\n';
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hot-pool
+  labels: { app: hot-pool }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hot-pool } }
+  template:
+    metadata: { labels: { app: hot-pool } }
+    spec:
+      containers:
+        - name: backend
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - { name: conf, mountPath: /etc/nginx/conf.d }
+      volumes:
+        - name: conf
+          configMap: { name: hot-content }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cold-pool
+  labels: { app: cold-pool }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: cold-pool } }
+  template:
+    metadata: { labels: { app: cold-pool } }
+    spec:
+      containers:
+        - name: backend
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - { name: conf, mountPath: /etc/nginx/conf.d }
+      volumes:
+        - name: conf
+          configMap: { name: cold-content }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hot-svc
+spec:
+  selector: { app: hot-pool }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cold-svc
+spec:
+  selector: { app: cold-pool }
+  ports: [{ port: 80, targetPort: 8080 }]

@@ -1,0 +1,38 @@
+# 单个真 vLLM Pod 冒烟测试 —— 照搬 controller.py b0 worker 的启动参数(Kaon 模型)。
+# hostPath 挂 /home/sesterce/hf 到 /root/.cache/huggingface(与 docker 版一致)。
+# 申请 1 张 GPU(device-plugin 分配),验证能加载模型 + 响应 /v1/models。
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-smoke
+spec:
+  runtimeClassName: nvidia
+  restartPolicy: Never
+  containers:
+    - name: vllm
+      image: ssadds/vllm:kaon-0.22-v1.4-kvevict
+      imagePullPolicy: IfNotPresent
+      command: ["vllm","serve","/root/.cache/huggingface/Kaon-V3-nvpf4-mixed",
+                "--host","0.0.0.0","--port","8000",
+                "--served-model-name","kaon-release/Kaon-V3-nvpf4-mixed",
+                "--max-model-len","8192","--max-num-seqs","64",
+                "--max-num-batched-tokens","8192","--gpu-memory-utilization","0.94",
+                "--language-model-only","--trust-remote-code","--kv-cache-dtype","fp8",
+                "--quantization","compressed-tensors","--enable-prefix-caching",
+                "--speculative-config",
+                "{\"method\":\"mtp\",\"model\":\"/root/.cache/huggingface/models--google--gemma-4-26B-A4B-it-assistant/snapshots/6e5aaaf4c42b98394530b8fda2e95cadd65c151c\",\"num_speculative_tokens\":3}",
+                "--stream-interval","5","-O3"]
+      env:
+        - { name: HF_HUB_OFFLINE, value: "1" }
+        - { name: OMP_NUM_THREADS, value: "1" }
+        - { name: VLLM_KV_EVICT_TRUNC, value: "1" }
+        - { name: VLLM_KV_EVICT_TRUNC_MAX_CONVS, value: "8192" }
+        - { name: VLLM_KV_EVICT_TRUNC_TTL_SEC, value: "1800" }
+      ports: [{ containerPort: 8000 }]
+      resources:
+        limits: { nvidia.com/gpu: 1 }
+      volumeMounts:
+        - { name: hf, mountPath: /root/.cache/huggingface }
+  volumes:
+    - name: hf
+      hostPath: { path: /home/sesterce/hf, type: Directory }

@@ -1,6 +1,8 @@
 # Skills 使用指南
 
-本仓库共 **26 个** skill，放在 `~/.cursor/skills/`。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+本仓库共 **39 个** skill，源文件在 `~/.cursor/cursor-skills/skills/`（运行时经 symlink 暴露在 `~/.cursor/skills/`）。Cursor 启动时会自动扫描；你也可以在对话里 **@skill 名** 或 **用自然语言描述场景** 触发。
+
+**5 条全局 Rules**（自动生效，无需 @）→ [RULES-GUIDE.md](RULES-GUIDE.md)
 
 ## 怎么触发
 
@@ -29,6 +31,33 @@
 vLLM 已经起好了，SLO 是 p50 e2e ≤ 200ms，帮我找最大稳定 QPS。
 client 用 online_replay.py，结果写到 bench-runs/kvbm_bw_study/phase8_bs/
 ```
+
+---
+
+### `pp-separation-benchmark`
+
+**干什么**：在同一 GPU 预算和多轮对话回放负载下，对比**统一缓存感知基线**与**截断/未截断请求冷热分池**。它会同时统计请求数和 token 负载占比，二分测量基线最大可持续 QPS，扫描热/冷 GPU 配比，并在总体、热池、冷池 SLO 以及池内不均衡度约束下选出最优配比。
+
+**两种验证层级**：
+
+- 默认的 policy-fidelity 层使用 Docker + nginx，用于回答“冷热分离是否值得”，并尽量排除 CNI/kube-proxy 噪声。
+- orchestration-fidelity 层使用 kind + ingress-nginx + NVIDIA device-plugin，用于验证 Kubernetes 部署形式；不把它的绝对 QPS 与 Docker 层直接比较。
+
+**示例**：
+```text
+@pp-separation-benchmark
+用这份多轮对话 replay 数据集，对比统一缓存感知基线与冷热分池。
+先跑 Docker + nginx 层，分析截断请求/token 占比，扫热冷 GPU 配比，
+在 p50 e2e SLO 下报告最大 QPS、分池延迟、缓存命中率和池内不均衡度。
+```
+
+```bash
+# 先检查数据集的冷热请求数和 token 负载形状
+cd ~/.cursor/skills/pp-separation-benchmark
+python3 scripts/workload_shape.py --help
+```
+
+**关键约束**：热/冷卡数之和等于可用 GPU 总数，并按 token 负载而不是仅按请求数分配；一个配比连最低 QPS 都无法通过时应记录为 `failed_low` 并继续扫描，不应将整个实验当作异常终止。共享宿主机上不得修改全局 Docker 配置、重启宿主机 Docker 或触碰非授权 GPU。
 
 ---
 
@@ -282,6 +311,160 @@ python3 scripts/layer_timeline_analyzer.py \
 
 ---
 
+### 成熟框架加功能（推荐链路）
+
+往 vLLM / SGLang / TRT-LLM / benchmark harness 等**已有大量惯例的仓库**加功能时，按顺序用：
+
+```text
+setup-matt-pocock-skills           → 目标 repo 首次：docs/agents/ 配置（一次性）
+parallel-exploring / search-first  → 找现有实现和扩展点
+prototype                          → routing/状态机 等先 throwaway 验证（可选）
+brainstorming / grill-with-docs    → 设计 + 你 approve
+writing-plans                      → 按文件拆 bite-sized task
+to-issues                          → 大 feature 拆 vertical-slice GitHub issues（可选）
+executing-plans + tdd              → 逐步实施
+review + simplify-code             → PR 前：对照 spec/CONTRIBUTING + 收 diff
+verification-before-completion     → 有证据再 say done
+```
+
+---
+
+### `karpathy-guidelines`
+
+**干什么**：与全局 rule `karpathy-guidelines` 相同——[Karpathy 四条](https://github.com/multica-ai/andrej-karpathy-skills)：先澄清假设、极简实现、只改必要代码、用可验证标准收尾。Rule 已 **alwaysApply**；本 skill 用于长任务开头主动 `@` 强调。
+
+**示例**：
+```text
+@karpathy-guidelines
+接下来改 production-stack 路由：先列出假设和 tradeoff，别过度抽象，每步给可验证的检查点。
+```
+
+---
+
+### `search-first`
+
+**干什么**：**写代码前先搜**——仓库内 `rg`、框架 API/插件/registry、PyPI/npm、GitHub；Adopt / Extend / Build 决策矩阵。成熟框架加功能时的 **第一步**。
+
+**示例**：
+```text
+@search-first
+要在 vLLM 里加一个 custom op，先找 repo 里类似 op 怎么注册、测试怎么写，再决定 extend 还是新写。
+```
+
+---
+
+### `brainstorming`
+
+**干什么**：**动代码前**把想法磨成设计/spec——逐条提问、2–3 种方案、分段 present、**用户 approve 前禁止写代码**。适合「看起来简单其实容易绕远」的 feature。
+
+**示例**：
+```text
+@brainstorming
+我想给 benchmark harness 加 prefix-cache hit rate 统计，先 brainstorm：入口放哪、和现有 metrics 怎么对齐。
+```
+
+Spec 默认写到 `docs/specs/YYYY-MM-DD-<topic>-design.md`。
+
+---
+
+### `writing-plans`
+
+**干什么**：有 approved spec 后，写 **bite-sized 实施计划**（精确路径、完整代码片段、命令 + 期望输出）。强调 **follow established patterns**，不擅自重构大文件。
+
+**示例**：
+```text
+@writing-plans
+spec 在 docs/specs/2026-05-29-kv-cache-metrics-design.md，帮我写 implementation plan。
+```
+
+Plan 默认写到 `docs/plans/YYYY-MM-DD-<feature>.md`。
+
+---
+
+### `executing-plans`
+
+**干什么**：按 plan **逐步执行**，每步跑 verification；blocked 就停、不猜。完成后接 `verification-before-completion`。
+
+**示例**：
+```text
+@executing-plans
+按 docs/plans/2026-05-29-kv-cache-metrics.md 实施，inline 执行，每 task 完 checkpoint。
+```
+
+---
+
+### `simplify-code`
+
+**干什么**：对 **branch diff** 做三轮审查（复用 / 质量 / 效率），简化冗余代码但 **行为不变**；PR 前用。Fewer lines 不是目标，更快读懂才是。
+
+**示例**：
+```text
+@simplify-code
+feature 分支写完了，帮我把相对 origin/main 的 diff 简化一遍，然后跑相关测试。
+```
+
+---
+
+### `verification-before-completion`
+
+**干什么**：声称「完成 / 测试通过 / bug 修了」之前，**必须先跑命令并贴证据**。禁止 "should pass" / "looks good"。
+
+**示例**：
+```text
+@verification-before-completion
+改完 online_replay.py 了，提交前帮我跑测试并确认输出再汇报。
+```
+
+---
+
+### `setup-matt-pocock-skills`
+
+**干什么**：在**目标代码仓库**（非 skills 仓库）一次性 scaffold `docs/agents/`——issue tracker 用法、triage 标签映射、CONTEXT/ADR 布局。`to-issues` / `review` 的前置步骤。
+
+**示例**：
+```text
+@setup-matt-pocock-skills
+在 production-stack 仓库配好 GitHub issue + triage 标签，写进 docs/agents/。
+```
+
+---
+
+### `to-issues`
+
+**干什么**：把 plan/PRD 拆成 **vertical-slice GitHub issues**（AFK/HITL、依赖关系、acceptance criteria）。适合多 PR 大 feature、benchmark study、routing 改造。
+
+**示例**：
+```text
+@to-issues
+把 docs/plans/cache-aware-overload-routing.md 拆成 4 个 AFK issue，标 ready-for-agent。
+```
+
+---
+
+### `prototype`
+
+**干什么**：**可丢弃原型**——终端 TUI 验证 state machine / routing 策略（[LOGIC.md](prototype/LOGIC.md)），或单页多 UI 方案（[UI.md](prototype/UI.md)）。回答一个问题后删壳、保留结论。
+
+**示例**：
+```text
+@prototype
+用终端 TUI 原型验证 cache-aware overload routing 的状态转移，再写进 production-stack。
+```
+
+---
+
+### `review`
+
+**干什么**：**双轴 PR 审查**——Standards（CONTRIBUTING/CONTEXT/ADR）与 Spec（issue/plan）并行 subagent，对照 `git diff main...HEAD` 分别报告，不混轴。
+
+**示例**：
+```text
+@review
+review 当前分支相对 main 的改动，spec 对照 #42 和 docs/plans/cache-aware-routing.md。
+```
+
+---
+
 ### `diagnose`
 
 **干什么**：**通用硬 bug / 性能回归** 诊断闭环——建 feedback loop → 复现 → 假设 → 插桩 → 修复 → 回归测试。和 `perf-*` 互补（更偏逻辑 bug、flaky、配置回归）。
@@ -344,6 +527,30 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 ---
 
 ## 六、学习与文档
+
+### `academic-figure-workflow`
+
+**干什么**：创建、重排并验收论文/学位论文中的 SVG 机理图和架构图。新图先建立论证、节点—边、字号、图例和重复结构台账，再使用可测试的语义元数据生成；内置 600 dpi 预览、真实字体包围盒、箭头端点、同级字号、图例闭合以及 DOCX/WPS 最小变更门禁。用户指出一次系统性缺陷后，会审计整组插图并把它升级成自动回归规则，而不是只改截图坐标。
+
+**示例**：
+```text
+@academic-figure-workflow
+把这段方法重排成 160 mm 宽的论文架构图，保留可编辑 SVG，
+做文字碰撞和箭头中心线 QA，通过后再插入 WPS 文档。
+```
+
+```bash
+uv run ~/.cursor/skills/academic-figure-workflow/scripts/qa_svg.py /path/to/figures --pattern '图3-*.svg'
+```
+
+同尺寸 Word 插图替换必须保持全部 XML 不变：
+
+```bash
+uv run ~/.cursor/skills/academic-figure-workflow/scripts/docx_change_guard.py replace \
+  baseline.docx revised.docx --rel-id rId5 --replacement figure.png
+```
+
+---
 
 ### `pdf`
 
@@ -412,6 +619,21 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 3. @perf-nsight-compute-analysis → ncu 验证优化效果
 ```
 
+### 往成熟框架加功能（vLLM / SGLang / harness patch）
+
+```text
+0. @setup-matt-pocock-skills → 目标 repo 首次配置（可选）
+1. @search-first             → 找同类实现 + 扩展点
+2. @parallel-exploring       → 大仓库并行扫（可选）
+3. @prototype                → routing/状态机先验证（可选）
+4. @brainstorming            → 设计 + approve（大改用 @grill-with-docs）
+5. @writing-plans            → bite-sized plan
+6. @to-issues                → 拆 GitHub issues（多 PR 时）
+7. @executing-plans + @tdd   → 实施
+8. @review + @simplify-code  → PR 前审查
+9. @verification-before-completion → 有证据再 done
+```
+
 ### 写调研报告
 
 ```text
@@ -440,8 +662,19 @@ workload、baseline、FlexKV 配置、成功标准，并更新 CONTEXT.md。
 | 写 CuTe/CUTLASS kernel | `kernel-cute-writing` |
 | 第一次进大仓库 | `codebase-onboarding` / `parallel-exploring` |
 | 严格 review 高性能代码 | `high-performance-code-review` |
+| 加功能前先搜现有模式 | `search-first` |
+| 动代码前先设计 | `brainstorming` |
+| spec → 实施计划 | `writing-plans` |
+| 按计划逐步做 | `executing-plans` |
+| 目标 repo 配 issue/ADR | `setup-matt-pocock-skills` |
+| plan 拆 GitHub issues | `to-issues` |
+| 验证 routing/状态机 | `prototype` |
+| PR 双轴审查 | `review` |
+| PR 前简化 diff | `simplify-code` |
+| 说「完成了」之前 | `verification-before-completion` |
 | 大改前先对齐方案 | `grill-with-docs` |
 | bug / 回归 | `diagnose` |
 | 写测试/脚本 | `tdd` |
 | 换 agent 继续 | `handoff` |
 | 读 PDF/PPT/Word | `pdf` / `pptx` / `docx` |
+| 强调极简/手术式改动（rule 已默认开） | `@karpathy-guidelines` |

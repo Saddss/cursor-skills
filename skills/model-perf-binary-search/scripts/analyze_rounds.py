@@ -93,9 +93,9 @@ def main() -> int:
                              "When multiple are given (sharded clients), per-round "
                              "p50 is averaged across files for the same round index.")
     parser.add_argument("--total-rounds", type=int, required=True,
-                        help="Total rounds expected (e.g. 12 or 24).")
+                        help="Total rounds expected (e.g. 8 or 16).")
     parser.add_argument("--tail-window", type=int, required=True,
-                        help="Number of trailing rounds to average (e.g. 6 or 12).")
+                        help="Number of trailing rounds to average (e.g. 4 or 8).")
     parser.add_argument("--slo", type=float, default=6.5,
                         help="E2E p50 latency SLO in seconds (default 6.5).")
     parser.add_argument("--auto-steady", action="store_true",

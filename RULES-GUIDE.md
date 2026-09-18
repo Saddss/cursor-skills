@@ -1,6 +1,6 @@
 # Rules 使用指南
 
-本仓库 **7 条** 全局 Project Rule，源文件在 `~/.cursor/cursor-skills/rules/*.mdc`。安装后 Cursor 从 `~/.cursor/rules/` 加载（目录 symlink 到仓库 `rules/`）。
+本仓库 **8 条** 全局 Project Rule，源文件在 `~/.cursor/cursor-skills/rules/*.mdc`。安装后 Cursor 从 `~/.cursor/rules/` 加载（目录 symlink 到仓库 `rules/`）。
 
 与 **Skills** 的区别：
 
@@ -102,9 +102,26 @@
 
 **无需 @ 触发**。
 
+## 8. `code-review-style-guide`
+
+**干什么**：把 Issue #32 及其全部评论整理为代码审查规则，覆盖简洁性、正确性、性能、命名、类型、注释、日志、测试和验证。
+
+**何时生效**：所有代码审查、实现和重构任务自动生效。
+
+**你会看到的行为**：
+- 优先内联只调用一两次的短辅助函数，避免没有复用价值的抽象
+- 让错误直接暴露，删除无依据的防御性分支和宽泛捕获
+- 使用真实物理含义命名，禁止使用 `Any`、`getattr` 和 `hasattr` 绕过约束
+- 注释只保留维护者需要的原因，并遵循仓库语言和作者标注约定
+- 检查性能热路径、类型完整性、测试确定性和验证结果
+
+**来源**：
+- [Issue #32](https://github.com/zhaochenyang20/sglang-diffusion-routing/issues/32)
+- Issue 评论中的可复用 Code Style Prompt
+
 ## 如何确认 Rules 已加载
 
-1. Cursor **Settings → Rules**，应看到上述 7 条（名称来自 `description` frontmatter）。
+1. Cursor **Settings → Rules**，应看到上述 8 条（名称来自 `description` frontmatter）。
 2. 终端检查 symlink：
    ```bash
    readlink ~/.cursor/rules
@@ -125,4 +142,5 @@
 | 避免过度设计、乱改无关代码 | `surgical-coding-guidelines` |
 | 控制注释质量 | `minimal-comments` |
 | Agent 行为和语言 | `agent-behavior-and-language` + `global-agent-behavior` |
+| 代码审查规范 | `code-review-style-guide` |
 | 想主动强调 Karpathy 原则 | 可额外 `@karpathy-guidelines`（skill） |

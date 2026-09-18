@@ -1,11 +1,11 @@
 ---
-description: 强制执行远程全局 AGENTS.md 中的语言、行为、验证和安全规则
+description: 强制执行本机全局 AGENTS.md 中的语言、行为、验证和安全规则
 alwaysApply: true
 ---
 
 # 全局代理规则
 
-执行任何任务前，必须读取并遵循 `/root/.codex/AGENTS.md` 中的全部强制规则。该文件是本机全局规则的唯一来源，规则内容发生变化时，以该文件的当前内容为准。
+执行任何任务前，必须读取并遵循本机 `$CODEX_HOME/AGENTS.md` 中的全部强制规则。macOS 默认路径为 `~/.codex/AGENTS.md`。该文件是本机全局规则的唯一来源，规则内容发生变化时，以该文件的当前内容为准。
 
 与其他 Cursor rules 和 skills 共同执行时：
 

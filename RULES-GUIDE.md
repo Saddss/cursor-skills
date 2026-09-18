@@ -1,6 +1,6 @@
 # Rules 使用指南
 
-本仓库 **5 条** 全局 Project Rule，源文件在 `~/.cursor/cursor-skills/rules/*.mdc`。安装后 Cursor 从 `~/.cursor/rules/` 加载（目录 symlink 到仓库 `rules/`）。
+本仓库 **7 条** 全局 Project Rule，源文件在 `~/.cursor/cursor-skills/rules/*.mdc`。安装后 Cursor 从 `~/.cursor/rules/` 加载（目录 symlink 到仓库 `rules/`）。
 
 与 **Skills** 的区别：
 
@@ -81,9 +81,30 @@
 
 ---
 
+## 6. `agent-behavior-and-language`
+
+**干什么**：把本机 Agent 规则中的语言、快速失败、禁止伪测试、文件编辑和验证闭环要求应用到每次对话。
+
+**何时生效**：所有任务自动生效。
+
+**你会看到的行为**：
+- 根据可核验材料作出判断，提供链接前先读取页面
+- 错误在发生位置报告，不隐藏错误或添加无依据回退
+- 不使用模拟对象、虚假数据和仅为通过测试而添加的绕过逻辑
+- 不读取或写入 `/tmp`，不使用程序化脚本批量改写代码
+- 修改后运行验证命令，说明未运行的检查和剩余风险
+
+## 7. `global-agent-behavior`
+
+**干什么**：读取当前机器的 `$CODEX_HOME/AGENTS.md`，让全局规则随本机配置变化。
+
+**何时生效**：所有任务自动生效。
+
+**无需 @ 触发**。
+
 ## 如何确认 Rules 已加载
 
-1. Cursor **Settings → Rules**，应看到上述 5 条（名称来自 `description` frontmatter）。
+1. Cursor **Settings → Rules**，应看到上述 7 条（名称来自 `description` frontmatter）。
 2. 终端检查 symlink：
    ```bash
    readlink ~/.cursor/rules
@@ -103,4 +124,5 @@
 | 要 kill 进程 / 删容器 / 清磁盘 | `confirm-before-destructive-operations` |
 | 避免过度设计、乱改无关代码 | `surgical-coding-guidelines` |
 | 控制注释质量 | `minimal-comments` |
+| Agent 行为和语言 | `agent-behavior-and-language` + `global-agent-behavior` |
 | 想主动强调 Karpathy 原则 | 可额外 `@karpathy-guidelines`（skill） |
